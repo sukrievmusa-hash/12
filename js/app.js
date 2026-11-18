@@ -53,6 +53,26 @@
   const rnd = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('');
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : rnd(16).replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5'));
   const pending = () => LS.get(K.pay, null);
+
+  // ---------- анонимная статистика заходов (случайный id в браузере, без имён и IP) ----------
+  const DNT = navigator.doNotTrack === '1' || window.doNotTrack === '1';
+  function vid() { let v = LS.get('synaq_vid', null); if (!v) { v = rnd(12); LS.set('synaq_vid', v); } return v; }
+  function source() {
+    const q = (new URLSearchParams(location.search).get('s') || '').toLowerCase();
+    if (q) return q;
+    let h = ''; try { h = new URL(document.referrer).hostname; } catch (e) { /* пусто */ }
+    if (!h || h === location.hostname) return 'direct';
+    if (/tiktok/.test(h)) return 'tt'; if (/instagram/.test(h)) return 'ig'; if (/(^|\.)t\.me$|telegram/.test(h)) return 'tg';
+    if (/whatsapp|wa\.me/.test(h)) return 'wa'; if (/google/.test(h)) return 'google'; if (/youtube|youtu\.be/.test(h)) return 'yt';
+    return 'other';
+  }
+  const SRC0 = source();
+  const sent = {};
+  function track(ev) {
+    if (DNT || !C.payApi || sent[ev]) return; sent[ev] = 1;
+    try { fetch(C.payApi, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'hit', vid: vid(), src: SRC0, ev }) }).catch(() => {}); } catch (e) { /* не мешаем сайту */ }
+  }
+
   let payTimer = null;
   async function checkPay(silent) {
     const p = pending(); if (!p || hasAccess()) return;
@@ -110,6 +130,7 @@
   }
 
   function paywall(reason) {
+    track('paywall');
     if (pending() && !hasAccess()) return waitScreen();
     openModal(`
       <h3>Полный доступ — ${money(C.price)}${C.priceOld ? ` <s class="muted" style="font-size:16px;font-weight:500">${money(C.priceOld)}</s>` : ''}</h3>
@@ -149,7 +170,7 @@
         $('#payErr').innerHTML = `Не получилось отправить заявку. Проверьте интернет или <a href="${waLink(`Здравствуйте! Оплатил(а) «Сынақ» ${C.price} ₸ от имени «${name}».`)}" target="_blank" rel="noopener">напишите в WhatsApp</a>.`;
         return;
       }
-      LS.set(K.pay, p); refreshHeader(); waitScreen(); startPayWatch();
+      LS.set(K.pay, p); track('pay'); refreshHeader(); waitScreen(); startPayWatch();
     };
     const go = async () => {
       const btn = $('#codeBtn'); btn.disabled = true; $('#codeErr').textContent = '';
@@ -241,6 +262,7 @@
   }
 
   function pageTests(subject) {
+    track('tests');
     subject = SUBJ[subject] ? subject : (SUBJ[LS.get(K.subj, '')] ? LS.get(K.subj, '') : 'math');
     LS.set(K.subj, subject);
     const run = LS.get(K.run, null);
@@ -271,6 +293,7 @@
   }
 
   function startTest(subject, variant) {
+    track('start'); track('subj:' + subject);
     const cur = LS.get(K.run, null);
     if (cur && !confirm('Начать новый тест? Незавершённый тест будет сброшен.')) return;
     LS.set(K.run, { subject, variant, answers: {}, flags: {}, cur: 0, startedAt: Date.now(), duration: C.durationMin * 60000 });
@@ -353,7 +376,7 @@
   }
 
   function finish(run, qs) {
-    clearInterval(timerId);
+    clearInterval(timerId); track('finish');
     const per = qs.map((q, i) => G.scoreQuestion(q, run.answers[i]));
     const score = per.reduce((a, b) => a + b, 0);
     const rec = { id: 'a' + Date.now(), subject: run.subject, variant: run.variant, answers: run.answers, score, per,
@@ -452,6 +475,7 @@
   }
   window.addEventListener('hashchange', route);
   route();
+  track('visit');
   startPayWatch();
   document.addEventListener('visibilitychange', () => { if (!document.hidden && pending()) checkPay(true); });
 })();
