@@ -349,7 +349,7 @@
   // ---------- статистика ----------
   function pageStats() {
     const h = history();
-    const avg = (arr) => (arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10 : '—');
+    const avg = (arr) => (arr.length ? String(Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10).replace('.', ',') : '—');
     const by = (s) => h.filter((x) => x.subject === s).map((x) => x.score);
     app.innerHTML = `<div class="wrap"><div class="page-head"><h1>Мои результаты</h1><p>Результаты хранятся в этом браузере.</p></div>
       ${h.length ? `<div class="kpis" style="margin:16px 0">
