@@ -107,7 +107,9 @@ details.faq p { color: var(--muted); margin: 10px 0 0; }
 .page-head { padding: 26px 0 8px; }
 .page-head h1 { margin: 0 0 4px; font-size: clamp(24px, 4vw, 32px); letter-spacing: -.02em; }
 .page-head p { margin: 0; color: var(--muted); }
-.tabs { display: inline-flex; background: #e9edf5; padding: 4px; border-radius: 12px; margin: 18px 0; }
+.tabs { display: inline-flex; flex-wrap: wrap; gap: 2px; background: #e9edf5; padding: 4px; border-radius: 12px; margin: 18px 0; }
+@media (max-width: 560px) { .tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; } .tabs button { padding: 9px 4px; font-size: 15px; min-width: 0; } }
+.qtext pre.code, .context pre.code { background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; margin: 10px 0 0; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-x: auto; white-space: pre; }
 .tabs button { border: 0; background: transparent; padding: 9px 18px; border-radius: 9px; font-weight: 700; color: var(--muted); }
 .tabs button.on { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
 .variants { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }

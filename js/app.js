@@ -9,8 +9,11 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* приватный режим */ } },
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* */ } },
   };
-  const K = { access: 'synaq_access', run: 'synaq_run', hist: 'synaq_history' };
-  const SUBJ = { math: 'Математика', physics: 'Физика' };
+  const K = { access: 'synaq_access', run: 'synaq_run', hist: 'synaq_history', subj: 'synaq_subject' };
+  const ORDER = ['math', 'physics', 'informatics', 'chemistry', 'biology', 'geography'];
+  const SUBJ = {}; ORDER.concat(Object.keys(G.SUBJECTS)).forEach((k) => { if (G.SUBJECTS[k] && !SUBJ[k]) SUBJ[k] = G.SUBJECTS[k].name; });
+  const NS = Object.keys(SUBJ).length, ALLV = NS * C.variantsCount;
+  const subjList = Object.values(SUBJ).map((n) => n.toLowerCase()).join(', ');
   const TYPE = { single: 'Один ответ', context: 'Контекстное', match: 'Соответствие', multi: 'Несколько ответов' };
   const L = ['A', 'B', 'C', 'D', 'E', 'F'];
   const money = (n) => n.toLocaleString('ru-RU').replace(/,/g, ' ') + ' ₸';
@@ -56,18 +59,19 @@
 
   function accessInfo() {
     const a = LS.get(K.access, {});
-    openModal(`<h3>Полный доступ открыт</h3><p class="muted">Код ${esc(a.code || '')} активирован на этом устройстве. Доступны все ${C.variantsCount} вариантов по математике и физике и случайные варианты.</p>
+    openModal(`<h3>Полный доступ открыт</h3><p class="muted">Код ${esc(a.code || '')} активирован на этом устройстве. Доступны все ${ALLV} вариантов (${C.variantsCount} по каждому из ${NS} предметов) и случайные варианты.</p>
       <p class="muted">Сменили телефон или браузер? Просто введите тот же код ещё раз.</p><a class="btn btn-block mt" href="#/tests" data-close>К тестам</a>`);
   }
 
   function paywall(reason) {
-    const msg = `Здравствуйте! Хочу полный доступ к «Сынақ» (пробный ЕНТ, математика и физика) за ${C.price} ₸. Оплатил(а) через Kaspi, отправляю чек.`;
+    const msg = `Здравствуйте! Хочу полный доступ к «Сынақ» (пробный ЕНТ, все предметы) за ${C.price} ₸. Оплатил(а) через Kaspi, отправляю чек.`;
     openModal(`
       <h3>Полный доступ — ${money(C.price)}${C.priceOld ? ` <s class="muted" style="font-size:16px;font-weight:500">${money(C.priceOld)}</s>` : ''}</h3>
       <p class="muted" style="margin:0">${reason ? esc(reason) + ' ' : ''}Разовая оплата, без подписки. Действует до ЕНТ-2027.</p>
       <ul class="ticks">
-        <li>${C.variantsCount} вариантов по математике + ${C.variantsCount} по физике (по 40 заданий)</li>
-        <li>Безлимитные случайные варианты: каждый раз новые числа</li>
+        <li>${NS} предметов: ${subjList}</li>
+        <li>${ALLV} вариантов — по ${C.variantsCount} на каждый предмет, по 40 заданий</li>
+        <li>Безлимитные случайные варианты: каждый раз новый набор заданий</li>
         <li>Разбор каждого задания с решением</li>
         <li>История результатов и прогресс</li>
       </ul>
@@ -107,13 +111,13 @@
     app.innerHTML = `
     <section class="hero"><div class="wrap hero-grid">
       <div>
-        <h1>Пробный ЕНТ по <em>математике</em> и <em>физике</em> — как на настоящем</h1>
-        <p class="lead">40 заданий в формате профильного предмета, баллы из 50, таймер и разбор каждой ошибки. Узнайте свой балл сегодня, а не в день экзамена.</p>
+        <h1>Пробный ЕНТ по <em>профильным предметам</em> — как на настоящем</h1>
+        <p class="lead">${Object.values(SUBJ).join(', ')}. 40 заданий в формате ЕНТ, баллы из 50, таймер и разбор каждой ошибки. Узнайте свой балл сегодня, а не в день экзамена.</p>
         <div class="cta-row">
           <a class="btn btn-lg" href="#/tests">Пройти бесплатно</a>
           <button class="btn btn-lg btn-ghost" data-pay>Полный доступ — ${money(C.price)}</button>
         </div>
-        <div class="chips"><span class="chip">25 + 5 + 5 + 5 заданий</span><span class="chip">Максимум 50 баллов</span><span class="chip">Таймер ${C.durationMin} мин</span><span class="chip">Работает с телефона</span></div>
+        <div class="chips"><span class="chip">${NS} предметов</span><span class="chip">25 + 5 + 5 + 5 заданий</span><span class="chip">Максимум 50 баллов</span><span class="chip">Таймер ${C.durationMin} мин</span><span class="chip">Работает с телефона</span></div>
       </div>
       <div class="mock" aria-hidden="true">
         <div class="mock-top"><span>Математика · Вариант 1</span><span>⏱ 68:12</span></div>
@@ -129,7 +133,7 @@
         <div class="card"><div class="icon">🎯</div><h3>Формат ЕНТ</h3><p>Задания с одним ответом, контекстные, на соответствие и с несколькими ответами. Баллы считаются по правилам ЕНТ.</p></div>
         <div class="card"><div class="icon">⏱</div><h3>Реальный таймер</h3><p>${C.durationMin} минут на предмет. Тренируйте темп: на ЕНТ время решает так же, как знания.</p></div>
         <div class="card"><div class="icon">🧠</div><h3>Разбор ошибок</h3><p>После теста показываем решение каждого задания. Понимаете, где ошиблись, а не просто видите балл.</p></div>
-        <div class="card"><div class="icon">🔁</div><h3>Варианты не заканчиваются</h3><p>Кроме ${C.variantsCount} вариантов есть «Случайный вариант»: новые числа каждый раз, ответы не выучить наизусть.</p></div>
+        <div class="card"><div class="icon">🔁</div><h3>Варианты не заканчиваются</h3><p>Кроме ${C.variantsCount} вариантов по каждому предмету есть «Случайный вариант»: каждый раз новый набор заданий.</p></div>
         <div class="card"><div class="icon">📈</div><h3>Прогресс</h3><p>Все попытки сохраняются. Видно, как растёт балл от варианта к варианту.</p></div>
         <div class="card"><div class="icon">📱</div><h3>С телефона</h3><p>Без установки и регистрации. Открыли ссылку и решаете.</p></div>
       </div>
@@ -151,10 +155,10 @@
       <h2>Тарифы</h2><p class="sub">Начните бесплатно. Платите, только если понравится.</p>
       <div class="grid2">
         <div class="card price-card"><h3>Бесплатно</h3><div class="price">0 ₸</div>
-          <ul class="ticks"><li>Вариант 1 по математике</li><li>Вариант 1 по физике</li><li>Полный разбор ответов</li><li class="no">Варианты 2–${C.variantsCount}</li><li class="no">Случайные варианты</li></ul>
+          <ul class="ticks"><li>Вариант 1 по каждому из ${NS} предметов</li><li>Полный разбор ответов</li><li class="no">Варианты 2–${C.variantsCount}</li><li class="no">Случайные варианты</li></ul>
           <a class="btn btn-ghost btn-block" href="#/tests">Начать</a></div>
         <div class="card price-card best"><span class="badge">Выгодно</span><h3>Полный доступ</h3><div class="price">${money(C.price)}${C.priceOld ? `<s>${money(C.priceOld)}</s>` : ''}</div>
-          <ul class="ticks"><li>${C.variantsCount * 2} вариантов (математика + физика)</li><li>Безлимитные случайные варианты</li><li>Разборы и история результатов</li><li>Разовая оплата через Kaspi</li><li>Доступ до ЕНТ-2027</li></ul>
+          <ul class="ticks"><li>${ALLV} вариантов по ${NS} предметам</li><li>Безлимитные случайные варианты</li><li>Разборы и история результатов</li><li>Разовая оплата через Kaspi</li><li>Доступ до ЕНТ-2027</li></ul>
           <button class="btn btn-block" data-pay>Получить доступ</button></div>
       </div>
     </div></section>
@@ -164,14 +168,15 @@
       <details class="faq"><summary>Это официальный тест НЦТ?</summary><p>Нет. «Сынақ» — независимый тренажёр. Формат и система баллов повторяют профильный предмет ЕНТ, задания составлены нами.</p></details>
       <details class="faq"><summary>Как оплатить?</summary><p>Переводом через Kaspi на ${esc(C.kaspiPhone)}. Пришлите чек в WhatsApp, и мы отправим код. Вводите его в «Полный доступ», и все варианты откроются.</p></details>
       <details class="faq"><summary>Нужна регистрация?</summary><p>Нет. Код и результаты хранятся в вашем браузере. На новом устройстве введите тот же код ещё раз.</p></details>
-      <details class="faq"><summary>Что такое «Случайный вариант»?</summary><p>Те же типы заданий, но с новыми числами при каждом запуске. Так тренируется навык решать, а не память на ответы.</p></details>
-      <details class="faq"><summary>Будут ли другие предметы?</summary><p>Да, планируем добавить. Напишите в WhatsApp, какой предмет нужен вам, и мы учтём.</p></details>
+      <details class="faq"><summary>Что такое «Случайный вариант»?</summary><p>Те же типы заданий, но с новыми числами и новым набором вопросов при каждом запуске. Так тренируется навык решать, а не память на ответы.</p></details>
+      <details class="faq"><summary>Какие предметы есть?</summary><p>${Object.values(SUBJ).join(', ')} — по ${C.variantsCount} вариантов на каждый. Нужен другой предмет? Напишите в WhatsApp, и мы учтём.</p></details>
     </div></section>`;
     app.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = () => paywall()));
   }
 
   function pageTests(subject) {
-    subject = SUBJ[subject] ? subject : 'math';
+    subject = SUBJ[subject] ? subject : (SUBJ[LS.get(K.subj, '')] ? LS.get(K.subj, '') : 'math');
+    LS.set(K.subj, subject);
     const run = LS.get(K.run, null);
     let cards = '';
     for (let v = 1; v <= C.variantsCount; v++) {
@@ -187,7 +192,7 @@
       ${run ? `<div class="notice row-between"><span>Есть незавершённый тест: ${SUBJ[run.subject]}, ${run.variant === 'random' || String(run.variant).startsWith('R') ? 'случайный вариант' : 'вариант ' + run.variant}.</span><a class="btn btn-sm" href="#/run">Продолжить</a></div>` : ''}
       <div class="tabs" role="tablist">${Object.entries(SUBJ).map(([k, n]) => `<button class="${k === subject ? 'on' : ''}" data-s="${k}">${n}</button>`).join('')}</div>
       <div class="variants">${cards}</div>
-      ${hasAccess() ? '' : `<div class="card mt row-between"><div><b>Откройте все ${C.variantsCount * 2} вариантов</b><div class="muted" style="font-size:15px">Разовая оплата ${money(C.price)} через Kaspi</div></div><button class="btn btn-accent" data-pay>Полный доступ</button></div>`}
+      ${hasAccess() ? '' : `<div class="card mt row-between"><div><b>Откройте все ${ALLV} вариантов по ${NS} предметам</b><div class="muted" style="font-size:15px">Разовая оплата ${money(C.price)} через Kaspi</div></div><button class="btn btn-accent" data-pay>Полный доступ</button></div>`}
     </div>`;
     app.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => (location.hash = '#/tests/' + b.dataset.s)));
     app.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = () => paywall()));
@@ -333,7 +338,7 @@
           <div class="kpis">${secs}</div>
           <div class="cta-row mt"><a class="btn" href="#/tests/${rec.subject}">Следующий вариант</a><a class="btn btn-ghost" href="#/stats">Все результаты</a></div></div>
       </div>
-      ${hasAccess() ? '' : `<div class="card row-between" style="margin-bottom:14px"><div><b>Хотите тренироваться дальше?</b><div class="muted" style="font-size:15px">Ещё ${C.variantsCount * 2 - 2} вариантов и безлимитные случайные за ${money(C.price)}</div></div><button class="btn btn-accent" data-pay>Открыть всё</button></div>`}
+      ${hasAccess() ? '' : `<div class="card row-between" style="margin-bottom:14px"><div><b>Хотите тренироваться дальше?</b><div class="muted" style="font-size:15px">Ещё ${ALLV - NS * C.freeVariants.length} вариантов по ${NS} предметам и безлимитные случайные за ${money(C.price)}</div></div><button class="btn btn-accent" data-pay>Открыть всё</button></div>`}
       <h2 style="margin:22px 0 4px">Разбор заданий</h2>
       <div class="filters"><button class="btn btn-sm" data-f="all">Все (40)</button><button class="btn btn-sm btn-ghost" data-f="err">Ошибки и пропуски (${wrong})</button></div>
       <div id="rvlist">${qs.map((_, i) => review(i)).join('')}</div>
@@ -354,11 +359,10 @@
     app.innerHTML = `<div class="wrap"><div class="page-head"><h1>Мои результаты</h1><p>Результаты хранятся в этом браузере.</p></div>
       ${h.length ? `<div class="kpis" style="margin:16px 0">
         <div class="kpi"><b>${h.length}</b><span>попыток</span></div>
-        <div class="kpi"><b>${by('math').length ? Math.max(...by('math')) : '—'}</b><span>лучший · математика</span></div>
-        <div class="kpi"><b>${by('physics').length ? Math.max(...by('physics')) : '—'}</b><span>лучший · физика</span></div>
-        <div class="kpi"><b>${avg(h.map((x) => x.score))}</b><span>средний балл</span></div></div>
+        <div class="kpi"><b>${avg(h.map((x) => x.score))}</b><span>средний балл</span></div>
+        ${Object.keys(SUBJ).filter((k) => by(k).length).map((k) => `<div class="kpi"><b>${Math.max(...by(k))}</b><span>лучший · ${SUBJ[k].toLowerCase()}</span></div>`).join('')}</div>
       <table class="hist"><tr><th>Дата</th><th>Тест</th><th>Балл</th><th></th></tr>
-        ${h.map((x) => `<tr><td>${new Date(x.date).toLocaleDateString('ru-RU')}</td><td>${SUBJ[x.subject]}<div class="muted" style="font-size:13px">${String(x.variant).startsWith('R') ? 'случайный' : 'вариант ' + x.variant}</div></td>
+        ${h.map((x) => `<tr><td>${new Date(x.date).toLocaleDateString('ru-RU')}</td><td>${SUBJ[x.subject] || x.subject}<div class="muted" style="font-size:13px">${String(x.variant).startsWith('R') ? 'случайный' : 'вариант ' + x.variant}</div></td>
           <td><b>${x.score}</b>/50<div class="bar"><i style="width:${x.score * 2}%"></i></div></td><td><a href="#/result/${x.id}">Разбор</a></td></tr>`).join('')}
       </table>` : `<div class="card empty"><p>Пока нет пройденных тестов.</p><a class="btn" href="#/tests">Пройти первый тест</a></div>`}
     </div>`;

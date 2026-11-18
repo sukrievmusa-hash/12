@@ -1,4 +1,4 @@
-/* Сынақ — генераторы оригинальных заданий в формате профильного предмета ЕНТ.
+/* Сынақ — движок вариантов + генераторы по математике и физике (остальные предметы — js/s-*.js).
    Каждый вариант = seed. Одинаковый seed → одинаковый вариант.
    Структура: 25 с одним ответом (1 б), 5 контекстных (1 б), 5 на соответствие (2 б), 5 с несколькими ответами (2 б) = 50 баллов. */
 (function (root) {
@@ -61,7 +61,7 @@
     }
     return out;
   }
-  function withUnit(v, unit) { return f(v) + (unit ? (unit === '°' || unit === '%' ? '' : ' ') + unit : ''); }
+  function withUnit(v, unit) { return f(v) + (unit ? (unit === '°' || unit === '%' || unit === '‰' ? '' : ' ') + unit : ''); }
 
   function single(R, text, correct, cands, unit, explain, context) {
     let opts;
@@ -364,7 +364,7 @@
   function tableMatch(R, text, table, explainFn) {
     const rows = R.shuffle(table).slice(0, 4);
     const left = rows.slice(0, 2).map((r) => [r[0], r[1]]);
-    return match(R, text, left, rows.slice(2).map((r) => r[1]), '', explainFn(left));
+    return match(R, text, left, rows.slice(2).map((r) => r[1]), '', explainFn ? explainFn(left) : left.map((x) => `${x[0]} — ${x[1]}`).join('; ') + '.');
   }
 
   const P_MATCH = [
@@ -409,7 +409,32 @@
     return R.shuffle(pool.map((_, i) => i)).slice(0, n).sort((a, b) => a - b);
   }
 
+  // ---------- банки фактов (для химии, биологии, информатики, географии) ----------
+  // В пронумерованном варианте N из каждого банка берётся свой элемент по кругу,
+  // поэтому соседние варианты не повторяют одни и те же вопросы. В случайном — любой.
+  let CUR_V = null;
+  function item(R, bank) {
+    if (CUR_V) {
+      if (bank.__off === undefined) Object.defineProperty(bank, '__off', { value: hashStr(JSON.stringify(bank[0]).slice(0, 60)) % bank.length });
+      return bank[(CUR_V - 1 + bank.__off) % bank.length];
+    }
+    return R.pick(bank);
+  }
+  // [вопрос, верный, неверный…, разбор]
+  function fact(R, bank) { const it = item(R, bank); return single(R, it[0], it[1], R.shuffle(it.slice(2, -1)), '', it[it.length - 1]); }
+  // [контекст, вопрос, верный, неверный…, разбор]
+  function factCtx(R, bank) { const it = item(R, bank); return single(R, it[1], it[2], R.shuffle(it.slice(3, -1)), '', it[it.length - 1], it[0]); }
+  // вопрос с фиксированным набором категорий: bank = [[объект, категория, (разбор)]]
+  function catQ(R, bank, cats, qfn, exfn) { const it = item(R, bank); return single(R, qfn(it[0]), it[1], R.shuffle(cats.filter((c) => c !== it[1])), '', exfn(it)); }
+  // {q, good, bad, ex}
+  function multiB(R, bank) { const it = item(R, bank); return multi(R, it.q, pickMix(R, it.good, it.bad, R.int(2, 3)), it.ex); }
+  function addSubject(key, name, pools) { SUBJECTS[key] = { name, pools }; }
+
   function buildVariant(subject, variant) {
+    CUR_V = /^\d+$/.test(String(variant)) ? Number(variant) : null;
+    try { return buildVariant0(subject, variant); } finally { CUR_V = null; }
+  }
+  function buildVariant0(subject, variant) {
     const S = SUBJECTS[subject]; if (!S) throw new Error('unknown subject');
     const seed = hashStr(subject + ':' + variant);
     const R = makeR(seed);
@@ -439,6 +464,7 @@
     return 0;
   }
 
-  const api = { buildVariant, scoreQuestion, SUBJECTS };
+  const H = { f, fr, gcd, sup, term, lead, single, ctx, match, multi, pickMix, tableMatch, item, fact, factCtx, catQ, multiB, makeR };
+  const api = { buildVariant, scoreQuestion, SUBJECTS, H, addSubject };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.SynaqGen = api;
 })(typeof window !== 'undefined' ? window : globalThis);
