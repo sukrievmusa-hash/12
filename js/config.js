@@ -6,6 +6,7 @@ window.SYNAQ_CONFIG = {
   kaspiPhone: "+7 707 526 94 42",
   whatsapp: "77075269442",     // для ссылки wa.me
   telegram: "",                // например "musa_dev" — если пусто, кнопка скрыта
+  payApi: "https://qvguiecmgleynqorexcs.supabase.co/functions/v1/synaq-pay", // заявки на оплату (подтверждение в Telegram)
   variantsCount: 12,           // вариантов на предмет
   freeVariants: [1],           // бесплатные варианты
   durationMin: 70,             // время на один предмет, мин

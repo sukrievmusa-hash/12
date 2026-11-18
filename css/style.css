@@ -235,3 +235,6 @@ details.faq p { color: var(--muted); margin: 10px 0 0; }
 .mt { margin-top: 16px; }
 .muted { color: var(--muted); }
 body.testing .footer { display: none; }
+
+.spin { width: 34px; height: 34px; margin: 6px auto 0; border: 4px solid #dbe2f5; border-top-color: var(--brand); border-radius: 50%; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }

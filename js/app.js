@@ -9,7 +9,7 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* приватный режим */ } },
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* */ } },
   };
-  const K = { access: 'synaq_access', run: 'synaq_run', hist: 'synaq_history', subj: 'synaq_subject' };
+  const K = { access: 'synaq_access', run: 'synaq_run', hist: 'synaq_history', subj: 'synaq_subject', pay: 'synaq_pay' };
   const ORDER = ['math', 'physics', 'informatics', 'chemistry', 'biology', 'geography'];
   const SUBJ = {}; ORDER.concat(Object.keys(G.SUBJECTS)).forEach((k) => { if (G.SUBJECTS[k] && !SUBJ[k]) SUBJ[k] = G.SUBJECTS[k].name; });
   const NS = Object.keys(SUBJ).length, ALLV = NS * C.variantsCount;
@@ -37,9 +37,54 @@
   async function activate(raw) {
     const code = normCode(raw); if (!code) return false;
     const h = (await sha(C.salt + code)).slice(0, 24);
-    if (!C.accessHashes.includes(h)) return false;
-    LS.set(K.access, { code, at: Date.now() });
-    return true;
+    if (C.accessHashes.includes(h)) { LS.set(K.access, { code, at: Date.now() }); return true; }
+    if (!C.payApi) return false;
+    const r = await api({ action: 'code', code });
+    if (r.ok) { LS.set(K.access, { code, at: Date.now(), via: 'kaspi' }); return true; }
+    if (r.reason === 'limit') throw new Error('limit');
+    return false;
+  }
+
+  // ---------- оплата: заявка -> подтверждение владельцем в Telegram -> доступ ----------
+  async function api(body) {
+    const r = await fetch(C.payApi, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    return r.json().catch(() => ({}));
+  }
+  const rnd = (n) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : rnd(16).replace(/^(.{8})(.{4})(.{4})(.{4})(.{12})$/, '$1-$2-$3-$4-$5'));
+  const pending = () => LS.get(K.pay, null);
+  let payTimer = null;
+  async function checkPay(silent) {
+    const p = pending(); if (!p || hasAccess()) return;
+    let r; try { r = await api({ action: 'status', id: p.id, secret: p.secret }); } catch (e) { return; }
+    if (r.status === 'approved') {
+      LS.set(K.access, { code: r.code, at: Date.now(), via: 'kaspi' }); LS.del(K.pay);
+      refreshHeader(); route();
+      openModal(`<h3>✅ Доступ открыт!</h3><p>Оплата подтверждена. Все ${ALLV} вариантов по ${NS} предметам открыты.</p>
+        <p class="muted" style="margin-bottom:4px">Ваш код — сохраните его, чтобы открыть доступ на другом телефоне:</p>
+        <div class="kaspi"><span>${esc(r.code)}</span><button class="btn btn-sm btn-ghost" id="copyCode">Копировать</button></div>
+        <a class="btn btn-block mt" href="#/tests" data-close>К тестам</a>`);
+      $('#copyCode').onclick = () => navigator.clipboard?.writeText(r.code).then(() => toast('Код скопирован'));
+    } else if (r.status === 'rejected' || r.status === 'unknown') {
+      LS.del(K.pay); refreshHeader();
+      if (!silent || r.status === 'rejected') openModal(`<h3>Оплата не найдена</h3><p class="muted">Мы не нашли перевод от «${esc(p.name)}». Проверьте, что перевели ${money(C.price)} на ${esc(C.kaspiPhone)}, и отправьте заявку ещё раз. Если деньги списались — напишите нам в WhatsApp, разберёмся.</p>
+        <a class="btn btn-ok btn-block mt" href="${waLink(`Здравствуйте! Оплатил(а) «Сынақ» ${C.price} ₸ от имени «${p.name}», но доступ не открылся.`)}" target="_blank" rel="noopener">Написать в WhatsApp</a>
+        <button class="btn btn-ghost btn-block mt" data-pay>Отправить заявку ещё раз</button>`);
+      $('#modalBody [data-pay]')?.addEventListener('click', () => paywall());
+    }
+  }
+  function waitScreen() {
+    const p = pending();
+    openModal(`<h3>⏳ Проверяем оплату</h3><p>Заявка от <b>${esc(p.name)}</b> на ${money(C.price)} отправлена. Обычно проверка занимает несколько минут, иногда дольше — например, ночью.</p>
+      <p class="muted">Можно закрыть это окно и решать бесплатный вариант: доступ откроется сам, как только оплату подтвердят.</p>
+      <div class="spin"></div>
+      <a class="btn btn-ghost btn-block mt" href="${waLink(`Здравствуйте! Оплатил(а) «Сынақ» ${C.price} ₸ от имени «${p.name}». Жду доступ.`)}" target="_blank" rel="noopener">Долго? Написать в WhatsApp</a>`);
+  }
+  function startPayWatch() {
+    clearInterval(payTimer);
+    if (!pending() || hasAccess()) return;
+    checkPay(true);
+    payTimer = setInterval(() => { if (!pending() || hasAccess()) return clearInterval(payTimer); checkPay(true); }, 6000);
   }
 
   // ---------- UI helpers ----------
@@ -52,9 +97,10 @@
   function refreshHeader() {
     const b = $('#accessBtn');
     if (hasAccess()) { b.textContent = '✓ Доступ открыт'; b.className = 'btn btn-sm btn-ghost'; }
+    else if (pending()) { b.textContent = '⏳ Проверяем оплату'; b.className = 'btn btn-sm btn-ghost'; }
     else { b.textContent = 'Полный доступ'; b.className = 'btn btn-sm btn-accent'; }
   }
-  $('#accessBtn').addEventListener('click', () => (hasAccess() ? accessInfo() : paywall()));
+  $('#accessBtn').addEventListener('click', () => (hasAccess() ? accessInfo() : pending() ? waitScreen() : paywall()));
   $('#footerWa').href = waLink('Здравствуйте! Вопрос по тренажёру «Сынақ».');
 
   function accessInfo() {
@@ -64,7 +110,7 @@
   }
 
   function paywall(reason) {
-    const msg = `Здравствуйте! Хочу полный доступ к «Сынақ» (пробный ЕНТ, все предметы) за ${C.price} ₸. Оплатил(а) через Kaspi, отправляю чек.`;
+    if (pending() && !hasAccess()) return waitScreen();
     openModal(`
       <h3>Полный доступ — ${money(C.price)}${C.priceOld ? ` <s class="muted" style="font-size:16px;font-weight:500">${money(C.priceOld)}</s>` : ''}</h3>
       <p class="muted" style="margin:0">${reason ? esc(reason) + ' ' : ''}Разовая оплата, без подписки. Действует до ЕНТ-2027.</p>
@@ -78,18 +124,38 @@
       <ol class="steps">
         <li>Переведите <b>${money(C.price)}</b> через Kaspi по номеру:
           <div class="kaspi"><span>${esc(C.kaspiPhone)}</span><button class="btn btn-sm btn-ghost" id="copyPhone">Копировать</button></div></li>
-        <li>Отправьте чек в WhatsApp — пришлём код доступа.
-          <a class="btn btn-ok btn-block mt" href="${waLink(msg)}" target="_blank" rel="noopener">Отправить чек в WhatsApp</a>
-          ${C.telegram ? `<a class="btn btn-ghost btn-block mt" href="https://t.me/${esc(C.telegram)}" target="_blank" rel="noopener">или в Telegram</a>` : ''}</li>
-        <li>Введите код:
-          <input class="input mt" id="codeIn" placeholder="SNQ-XXXX-XXXX" autocomplete="off" inputmode="latin">
-          <div class="err" id="codeErr"></div>
-          <button class="btn btn-block" id="codeBtn">Активировать</button></li>
-      </ol>`);
+        <li>Напишите имя, с которого переводили — как в Kaspi (например, «Айдана С.»):
+          <input class="input mt" id="payName" style="text-transform:none" placeholder="Имя и первая буква фамилии" autocomplete="name" maxlength="40">
+          <div class="err" id="payErr"></div>
+          <button class="btn btn-ok btn-block" id="payBtn">Я оплатил(а)</button>
+          <div class="muted" style="font-size:14px;margin-top:6px">Доступ откроется на этом устройстве автоматически, как только оплату подтвердят.</div></li>
+      </ol>
+      <details class="faq"><summary>У меня уже есть код</summary>
+        <input class="input mt" id="codeIn" placeholder="SNQ-XXXX-XXXX" autocomplete="off" inputmode="latin">
+        <div class="err" id="codeErr"></div>
+        <button class="btn btn-block" id="codeBtn">Активировать</button></details>
+      <p class="muted" style="font-size:14px;margin:10px 0 0">Вопросы — <a href="${waLink('Здравствуйте! Вопрос по оплате «Сынақ».')}" target="_blank" rel="noopener">WhatsApp</a></p>`);
     $('#copyPhone').onclick = () => { navigator.clipboard?.writeText(C.kaspiPhone.replace(/\s/g, '')).then(() => toast('Номер скопирован'), () => toast(C.kaspiPhone)); };
+    $('#payBtn').onclick = async () => {
+      const name = $('#payName').value.replace(/\s+/g, ' ').trim();
+      if (name.length < 2) { $('#payErr').textContent = 'Напишите имя отправителя, как оно видно в Kaspi.'; return; }
+      const btn = $('#payBtn'); btn.disabled = true; $('#payErr').textContent = '';
+      const p = { id: uuid(), secret: rnd(16), name, at: Date.now() };
+      try {
+        const r = await api({ action: 'request', id: p.id, secret: p.secret, name });
+        if (!r.ok) throw new Error(r.error || 'fail');
+      } catch (e) {
+        btn.disabled = false;
+        $('#payErr').innerHTML = `Не получилось отправить заявку. Проверьте интернет или <a href="${waLink(`Здравствуйте! Оплатил(а) «Сынақ» ${C.price} ₸ от имени «${name}».`)}" target="_blank" rel="noopener">напишите в WhatsApp</a>.`;
+        return;
+      }
+      LS.set(K.pay, p); refreshHeader(); waitScreen(); startPayWatch();
+    };
     const go = async () => {
       const btn = $('#codeBtn'); btn.disabled = true; $('#codeErr').textContent = '';
-      let ok = false; try { ok = await activate($('#codeIn').value); } catch (e) { $('#codeErr').textContent = 'Браузер не поддерживает проверку кода. Откройте сайт в Chrome или Safari.'; btn.disabled = false; return; }
+      let ok = false;
+      try { ok = await activate($('#codeIn').value); }
+      catch (e) { $('#codeErr').textContent = e.message === 'limit' ? 'Этот код уже активирован на нескольких устройствах. Напишите нам в WhatsApp.' : 'Не получилось проверить код. Проверьте интернет и попробуйте ещё раз.'; btn.disabled = false; return; }
       btn.disabled = false;
       if (!ok) { $('#codeErr').textContent = 'Код не найден. Проверьте, что ввели его без ошибок.'; return; }
       closeModal(); refreshHeader(); toast('Готово! Все варианты открыты'); route();
@@ -386,4 +452,6 @@
   }
   window.addEventListener('hashchange', route);
   route();
+  startPayWatch();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && pending()) checkPay(true); });
 })();
