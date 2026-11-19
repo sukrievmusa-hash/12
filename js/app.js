@@ -9,7 +9,8 @@
     set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* приватный режим */ } },
     del(k) { try { localStorage.removeItem(k); } catch (e) { /* */ } },
   };
-  const K = { access: 'synaq_access', run: 'synaq_run', hist: 'synaq_history', subj: 'synaq_subject', pay: 'synaq_pay' };
+  const K = { access: 'synaq_access', run: 'synaq_run', hist: 'synaq_history', subj: 'synaq_subject', pay: 'synaq_pay', daily: 'synaq_daily', dailyDone: 'synaq_daily_done', tlog: 'synaq_topiclog' };
+  const DAILY_N = 10;
   const ORDER = ['math', 'physics', 'informatics', 'chemistry', 'biology', 'geography'];
   const SUBJ = {}; ORDER.concat(Object.keys(G.SUBJECTS)).forEach((k) => { if (G.SUBJECTS[k] && !SUBJ[k]) SUBJ[k] = G.SUBJECTS[k].name; });
   const NS = Object.keys(SUBJ).length, ALLV = NS * C.variantsCount;
@@ -108,7 +109,14 @@
   }
 
   // ---------- UI helpers ----------
-  function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = false; clearTimeout(toast.t); toast.t = setTimeout(() => (t.hidden = true), 2600); }
+  function toast(msg, action) {
+    const t = $('#toast'); t.innerHTML = ''; const m = document.createElement('span'); m.textContent = msg; t.appendChild(m); t.hidden = false; clearTimeout(toast.t);
+    if (action) {
+      const b = document.createElement('button'); b.className = 'toast-btn'; b.textContent = action.label;
+      b.onclick = () => { t.hidden = true; action.fn(); }; t.appendChild(b);
+    }
+    toast.t = setTimeout(() => (t.hidden = true), action ? 6000 : 2600);
+  }
   function openModal(html) { $('#modalBody').innerHTML = html; $('#modal').hidden = false; }
   function closeModal() { $('#modal').hidden = true; }
   $('#modal').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) closeModal(); });
@@ -116,9 +124,9 @@
 
   function refreshHeader() {
     const b = $('#accessBtn');
-    if (hasAccess()) { b.textContent = '✓ Доступ открыт'; b.className = 'btn btn-sm btn-ghost'; }
-    else if (pending()) { b.textContent = '⏳ Проверяем оплату'; b.className = 'btn btn-sm btn-ghost'; }
-    else { b.textContent = 'Полный доступ'; b.className = 'btn btn-sm btn-accent'; }
+    if (hasAccess()) { b.textContent = '✓ Доступ'; b.className = 'btn btn-sm btn-ghost'; }
+    else if (pending()) { b.textContent = '⏳ Проверка'; b.className = 'btn btn-sm btn-ghost'; }
+    else { b.innerHTML = '<span class="hide-sm">Полный доступ</span><span class="show-sm">🔓 Доступ</span>'; b.className = 'btn btn-sm btn-accent'; }
   }
   $('#accessBtn').addEventListener('click', () => (hasAccess() ? accessInfo() : pending() ? waitScreen() : paywall()));
   $('#footerWa').href = waLink('Здравствуйте! Вопрос по тренажёру «Сынақ».');
@@ -139,8 +147,9 @@
         <li>${NS} предметов: ${subjList}</li>
         <li>${ALLV} вариантов — по ${C.variantsCount} на каждый предмет, по 40 заданий</li>
         <li>Безлимитные случайные варианты: каждый раз новый набор заданий</li>
+        <li>⚡ 10 задач в день по вашим слабым темам</li>
+        <li>Статистика: на каких темах вы чаще ошибаетесь</li>
         <li>Разбор каждого задания с решением</li>
-        <li>История результатов и прогресс</li>
       </ul>
       <ol class="steps">
         <li>Переведите <b>${money(C.price)}</b> через Kaspi по номеру:
@@ -192,6 +201,60 @@
     return h.length ? Math.max(...h.map((x) => x.score)) : null;
   }
 
+  const runName = (v) => (String(v).startsWith('R') ? 'случайный вариант' : 'вариант ' + v);
+
+  // ---------- темы и статистика ошибок ----------
+  const tpCache = {};
+  function recTopics(rec) { // [[тема, баллы, максимум], …] по каждому заданию попытки
+    if (rec.tp) return rec.tp;
+    if (tpCache[rec.id]) return tpCache[rec.id];
+    let out = [];
+    try {
+      const qs = G.buildVariant(rec.subject, rec.variant).questions;
+      out = qs.map((q, i) => [G.topicOf(rec.subject, q), G.scoreQuestion(q, rec.answers[i]), q.max]);
+    } catch (e) { /* старая попытка с неизвестным предметом */ }
+    return (tpCache[rec.id] = out);
+  }
+  function topicStats(subject) {
+    const m = {};
+    const add = (t, g, mx) => { const o = m[t] || (m[t] = { t, got: 0, max: 0, n: 0, wrong: 0 }); o.got += g; o.max += mx; o.n++; if (g < mx) o.wrong++; };
+    history().filter((x) => x.subject === subject).forEach((rec) => recTopics(rec).forEach(([t, g, mx]) => add(t, g, mx)));
+    LS.get(K.tlog, []).filter((x) => x.s === subject).forEach((x) => add(x.t, x.g, x.m));
+    return Object.values(m).map((o) => Object.assign(o, { err: o.max ? 1 - o.got / o.max : 0 }))
+      .sort((a, b) => b.err - a.err || b.wrong - a.wrong);
+  }
+  const statSubjects = () => Object.keys(SUBJ).filter((k) => history().some((x) => x.subject === k) || LS.get(K.tlog, []).some((x) => x.s === k));
+  const errColor = (e) => (e >= 0.5 ? 'var(--bad)' : e >= 0.25 ? 'var(--mid)' : 'var(--ok)');
+  function topicRows(list) {
+    return list.map((o) => `<div class="trow"><div class="row-between"><b>${esc(o.t)}</b><span class="muted" style="font-size:14px">ошибок ${o.wrong} из ${o.n} · ${Math.round(o.err * 100)}%</span></div>
+      <div class="bar tbar"><i style="width:${Math.max(4, Math.round(o.err * 100))}%;background:${errColor(o.err)}"></i></div></div>`).join('');
+  }
+
+  // ---------- общий вывод задания (тест и «задачи дня») ----------
+  function qBody(q, a) {
+    if (q.type === 'single' || q.type === 'context') return q.options.map((o, j) => `<button class="opt ${a === j ? 'on' : ''}" data-o="${j}"><span class="key">${L[j]}</span><span>${o}</span></button>`).join('');
+    if (q.type === 'multi') {
+      const sel = a || [];
+      return `<div class="hint">Выберите один или несколько правильных ответов</div>` + q.options.map((o, j) => `<button class="opt multi ${sel.includes(j) ? 'on' : ''}" data-m="${j}"><span class="key">${sel.includes(j) ? '✓' : L[j]}</span><span>${o}</span></button>`).join('');
+    }
+    const sel = a || [null, null];
+    return `<div class="hint">Для каждого пункта слева выберите номер из списка</div>
+      <div class="mright">${q.right.map((r, j) => `<div><b>${j + 1})</b> ${r}</div>`).join('')}</div>`
+      + q.left.map((l, li) => `<div class="mrow"><span class="ml">${L[li]}) ${l}</span><span class="mbtns">${q.right.map((_, j) => `<button class="mbtn ${sel[li] === j ? 'on' : ''}" data-l="${li}" data-r="${j}">${j + 1}</button>`).join('')}</span></div>`).join('');
+  }
+  function bindBody(box, q, getA, setA) {
+    box.querySelectorAll('[data-o]').forEach((b) => (b.onclick = () => { const j = +b.dataset.o; setA(getA() === j ? null : j); }));
+    box.querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => { const j = +b.dataset.m; const st = new Set(getA() || []); st.has(j) ? st.delete(j) : st.add(j); setA([...st].sort()); }));
+    box.querySelectorAll('[data-l]').forEach((b) => (b.onclick = () => { const st = (getA() || [null, null]).slice(); const li = +b.dataset.l, j = +b.dataset.r; st[li] = st[li] === j ? null : j; setA(st); }));
+  }
+  function reviewBody(q, a) {
+    if (q.type === 'single' || q.type === 'context') return `<ul class="rv-opts">${q.options.map((o, j) => `<li class="${j === q.answer ? 'c' : a === j ? 'w' : ''}">${L[j]}) ${o}${a === j ? '<span class="me">← ваш ответ</span>' : ''}</li>`).join('')}</ul>`;
+    if (q.type === 'multi') { const sel = a || []; return `<ul class="rv-opts">${q.options.map((o, j) => { const c = q.answer.includes(j), me = sel.includes(j); return `<li class="${c ? 'c' : me ? 'w' : ''}">${L[j]}) ${o}${me ? '<span class="me">← выбрано</span>' : ''}</li>`; }).join('')}</ul>`; }
+    const sel = a || [];
+    return `<ul class="rv-opts">${q.left.map((l, li) => { const ok = sel[li] === q.answer[li]; return `<li class="c">${L[li]}) ${l} → ${q.answer[li] + 1}) ${q.right[q.answer[li]]}</li>${!ok && sel[li] !== null && sel[li] !== undefined ? `<li class="w">Ваш ответ для ${L[li]}: ${sel[li] + 1}) ${q.right[sel[li]]}</li>` : ''}`; }).join('')}</ul>`;
+  }
+  const isAnswered = (a) => a !== undefined && a !== null && !(Array.isArray(a) && (a.length === 0 || a.every((x) => x === null || x === undefined)));
+
   // ---------- страницы ----------
   function pageHome() {
     const ex = G.buildVariant('math', 1).questions[0];
@@ -221,7 +284,8 @@
         <div class="card"><div class="icon">⏱</div><h3>Реальный таймер</h3><p>${C.durationMin} минут на предмет. Тренируйте темп: на ЕНТ время решает так же, как знания.</p></div>
         <div class="card"><div class="icon">🧠</div><h3>Разбор ошибок</h3><p>После теста показываем решение каждого задания. Понимаете, где ошиблись, а не просто видите балл.</p></div>
         <div class="card"><div class="icon">🔁</div><h3>Варианты не заканчиваются</h3><p>Кроме ${C.variantsCount} вариантов по каждому предмету есть «Случайный вариант»: каждый раз новый набор заданий.</p></div>
-        <div class="card"><div class="icon">📈</div><h3>Прогресс</h3><p>Все попытки сохраняются. Видно, как растёт балл от варианта к варианту.</p></div>
+        <div class="card"><div class="icon">⚡</div><h3>10 задач в день</h3><p>Каждый день — 10 новых задач. Чаще попадаются темы, где вы ошибаетесь. Входит в полный доступ.</p></div>
+        <div class="card"><div class="icon">📈</div><h3>Слабые темы</h3><p>Статистика показывает, на каких темах вы чаще всего ошибаетесь. Понятно, что повторить.</p></div>
         <div class="card"><div class="icon">📱</div><h3>С телефона</h3><p>Без установки и регистрации. Открыли ссылку и решаете.</p></div>
       </div>
     </div></section>
@@ -242,10 +306,10 @@
       <h2>Тарифы</h2><p class="sub">Начните бесплатно. Платите, только если понравится.</p>
       <div class="grid2">
         <div class="card price-card"><h3>Бесплатно</h3><div class="price">0 ₸</div>
-          <ul class="ticks"><li>Вариант 1 по каждому из ${NS} предметов</li><li>Полный разбор ответов</li><li class="no">Варианты 2–${C.variantsCount}</li><li class="no">Случайные варианты</li></ul>
+          <ul class="ticks"><li>Вариант 1 по каждому из ${NS} предметов</li><li>Полный разбор ответов</li><li class="no">Варианты 2–${C.variantsCount}</li><li class="no">Случайные варианты</li><li class="no">10 задач в день</li><li class="no">Статистика по всем темам</li></ul>
           <a class="btn btn-ghost btn-block" href="#/tests">Начать</a></div>
         <div class="card price-card best"><span class="badge">Выгодно</span><h3>Полный доступ</h3><div class="price">${money(C.price)}${C.priceOld ? `<s>${money(C.priceOld)}</s>` : ''}</div>
-          <ul class="ticks"><li>${ALLV} вариантов по ${NS} предметам</li><li>Безлимитные случайные варианты</li><li>Разборы и история результатов</li><li>Разовая оплата через Kaspi</li><li>Доступ до ЕНТ-2027</li></ul>
+          <ul class="ticks"><li>${ALLV} вариантов по ${NS} предметам</li><li>Безлимитные случайные варианты</li><li>⚡ 10 задач в день по слабым темам</li><li>Статистика ошибок по темам</li><li>Разовая оплата через Kaspi</li><li>Доступ до ЕНТ-2027</li></ul>
           <button class="btn btn-block" data-pay>Получить доступ</button></div>
       </div>
     </div></section>
@@ -261,6 +325,12 @@
     app.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = () => paywall()));
   }
 
+  function dailyLine(subject) {
+    if (!hasAccess()) return 'По вашим слабым темам · входит в полный доступ';
+    const D = (LS.get(K.daily, {})[today()] || {})[subject];
+    const n = D ? Object.keys(D.checked || {}).length : 0;
+    return n >= DAILY_N ? 'Сегодня всё решено ✓ Новые — завтра' : n ? `Решено ${n} из ${DAILY_N} — продолжите` : `${SUBJ[subject]}: новые задачи на сегодня`;
+  }
   function pageTests(subject) {
     track('tests');
     subject = SUBJ[subject] ? subject : (SUBJ[LS.get(K.subj, '')] ? LS.get(K.subj, '') : 'math');
@@ -279,6 +349,7 @@
       <div class="page-head"><h1>Пробные тесты</h1><p>Выберите предмет и вариант. Тест можно прервать: прогресс сохранится.</p></div>
       ${run ? `<div class="notice row-between"><span>Есть незавершённый тест: ${SUBJ[run.subject]}, ${run.variant === 'random' || String(run.variant).startsWith('R') ? 'случайный вариант' : 'вариант ' + run.variant}.</span><a class="btn btn-sm" href="#/run">Продолжить</a></div>` : ''}
       <div class="tabs" role="tablist">${Object.entries(SUBJ).map(([k, n]) => `<button class="${k === subject ? 'on' : ''}" data-s="${k}">${n}</button>`).join('')}</div>
+      <a class="daily-cta" href="#/daily/${subject}"><span class="dc-ico">⚡</span><span><b>10 задач в день</b><span class="muted">${dailyLine(subject)}</span></span><span class="dc-go">${hasAccess() ? 'Решать →' : '🔒 Платно'}</span></a>
       <div class="variants">${cards}</div>
       ${hasAccess() ? '' : `<div class="card mt row-between"><div><b>Откройте все ${ALLV} вариантов по ${NS} предметам</b><div class="muted" style="font-size:15px">Разовая оплата ${money(C.price)} через Kaspi</div></div><button class="btn btn-accent" data-pay>Полный доступ</button></div>`}
     </div>`;
@@ -295,9 +366,12 @@
   function startTest(subject, variant) {
     track('start'); track('subj:' + subject);
     const cur = LS.get(K.run, null);
-    if (cur && !confirm('Начать новый тест? Незавершённый тест будет сброшен.')) return;
+    // тот же вариант уже начат — просто продолжаем, без вопросов
+    if (cur && cur.subject === subject && String(cur.variant) === String(variant)) { location.hash = '#/run'; toast('Продолжаем начатый тест'); return; }
     LS.set(K.run, { subject, variant, answers: {}, flags: {}, cur: 0, startedAt: Date.now(), duration: C.durationMin * 60000 });
     location.hash = '#/run';
+    // вместо страшного окна «Подтвердите» — маленькая подсказка с кнопкой «Вернуть»
+    if (cur) toast(`Прошлый тест (${SUBJ[cur.subject] || ''}, ${runName(cur.variant)}) закрыт`, { label: 'Вернуть', fn: () => { LS.set(K.run, cur); route(); } });
   }
 
   // ---------- прохождение ----------
@@ -327,18 +401,7 @@
 
     function renderQ() {
       const i = run.cur, q = qs[i], a = run.answers[i];
-      let body = '';
-      if (q.type === 'single' || q.type === 'context') {
-        body = q.options.map((o, j) => `<button class="opt ${a === j ? 'on' : ''}" data-o="${j}"><span class="key">${L[j]}</span><span>${o}</span></button>`).join('');
-      } else if (q.type === 'multi') {
-        const sel = a || [];
-        body = `<div class="hint">Выберите один или несколько правильных ответов</div>` + q.options.map((o, j) => `<button class="opt multi ${sel.includes(j) ? 'on' : ''}" data-m="${j}"><span class="key">${sel.includes(j) ? '✓' : L[j]}</span><span>${o}</span></button>`).join('');
-      } else {
-        const sel = a || [null, null];
-        body = `<div class="hint">Для каждого пункта слева выберите номер из списка</div>
-          <div class="mright">${q.right.map((r, j) => `<div><b>${j + 1})</b> ${r}</div>`).join('')}</div>`
-          + q.left.map((l, li) => `<div class="mrow"><span class="ml">${L[li]}) ${l}</span><span class="mbtns">${q.right.map((_, j) => `<button class="mbtn ${sel[li] === j ? 'on' : ''}" data-l="${li}" data-r="${j}">${j + 1}</button>`).join('')}</span></div>`).join('');
-      }
+      const body = qBody(q, a);
       $('#q').innerHTML = `
         <div class="qmeta"><span class="num">Задание ${i + 1} из 40</span><span class="pill">${TYPE[q.type]}</span><span class="pill">${q.max} ${q.max === 1 ? 'балл' : 'балла'}</span>
           <button class="flag ${run.flags[i] ? 'on' : ''}" id="flag">${run.flags[i] ? '★ Отмечено' : '☆ Вернуться позже'}</button></div>
@@ -346,9 +409,7 @@
         <div class="qtext">${q.text}</div>${body}
         <div class="qnav"><button class="btn btn-ghost" id="prev" ${i === 0 ? 'disabled' : ''}>← Назад</button>
           ${i < 39 ? '<button class="btn" id="next">Далее →</button>' : '<button class="btn btn-ok" id="fin2">Завершить тест</button>'}</div>`;
-      $('#q').querySelectorAll('[data-o]').forEach((b) => (b.onclick = () => { const j = +b.dataset.o; run.answers[i] = run.answers[i] === j ? null : j; save(); renderQ(); renderPalette(); }));
-      $('#q').querySelectorAll('[data-m]').forEach((b) => (b.onclick = () => { const j = +b.dataset.m; const s = new Set(run.answers[i] || []); s.has(j) ? s.delete(j) : s.add(j); run.answers[i] = [...s].sort(); save(); renderQ(); renderPalette(); }));
-      $('#q').querySelectorAll('[data-l]').forEach((b) => (b.onclick = () => { const s = (run.answers[i] || [null, null]).slice(); const li = +b.dataset.l, j = +b.dataset.r; s[li] = s[li] === j ? null : j; run.answers[i] = s; save(); renderQ(); renderPalette(); }));
+      bindBody($('#q'), q, () => run.answers[i], (v) => { run.answers[i] = v; save(); renderQ(); renderPalette(); });
       $('#flag').onclick = () => { run.flags[i] = !run.flags[i]; save(); renderQ(); renderPalette(); };
       $('#prev').onclick = () => go(i - 1);
       if ($('#next')) $('#next').onclick = () => go(i + 1);
@@ -380,6 +441,7 @@
     const per = qs.map((q, i) => G.scoreQuestion(q, run.answers[i]));
     const score = per.reduce((a, b) => a + b, 0);
     const rec = { id: 'a' + Date.now(), subject: run.subject, variant: run.variant, answers: run.answers, score, per,
+      tp: qs.map((q, i) => [G.topicOf(run.subject, q), per[i], q.max]),
       spent: Math.min(Date.now() - run.startedAt, run.duration), date: Date.now() };
     const h = history(); h.unshift(rec); LS.set(K.hist, h.slice(0, 200));
     LS.del(K.run);
@@ -405,21 +467,15 @@
 
     function review(i) {
       const q = qs[i], a = rec.answers[i], st = status(i);
-      let body = '';
-      if (q.type === 'single' || q.type === 'context') {
-        body = `<ul class="rv-opts">${q.options.map((o, j) => `<li class="${j === q.answer ? 'c' : a === j ? 'w' : ''}">${L[j]}) ${o}${a === j ? '<span class="me">← ваш ответ</span>' : ''}</li>`).join('')}</ul>`;
-      } else if (q.type === 'multi') {
-        const sel = a || [];
-        body = `<ul class="rv-opts">${q.options.map((o, j) => { const c = q.answer.includes(j), me = sel.includes(j); return `<li class="${c ? 'c' : me ? 'w' : ''}">${L[j]}) ${o}${me ? '<span class="me">← выбрано</span>' : ''}</li>`; }).join('')}</ul>`;
-      } else {
-        const sel = a || [];
-        body = `<ul class="rv-opts">${q.left.map((l, li) => { const ok = sel[li] === q.answer[li]; return `<li class="c">${L[li]}) ${l} → ${q.answer[li] + 1}) ${q.right[q.answer[li]]}</li>${!ok && sel[li] !== null && sel[li] !== undefined ? `<li class="w">Ваш ответ для ${L[li]}: ${sel[li] + 1}) ${q.right[sel[li]]}</li>` : ''}`; }).join('')}</ul>`;
-      }
-      return `<div class="rv ${st}" data-st="${st}"><div class="rv-head"><span><b>№${i + 1}</b> · ${TYPE[q.type]}</span><span class="st ${st}">${stText[st]} · ${per[i]}/${q.max}</span></div>
+      const body = reviewBody(q, a);
+      return `<div class="rv ${st}" data-st="${st}"><div class="rv-head"><span><b>№${i + 1}</b> · ${TYPE[q.type]} · <span class="muted">${esc(G.topicOf(rec.subject, q))}</span></span><span class="st ${st}">${stText[st]} · ${per[i]}/${q.max}</span></div>
         ${q.context ? `<div class="context">${q.context}</div>` : ''}<div class="qtext">${q.text}</div>${body}<div class="explain"><b>Решение</b>${q.explain}</div></div>`;
     }
 
     const wrong = qs.map((_, i) => status(i)).filter((s) => s !== 'ok').length;
+    const tmap = {};
+    qs.forEach((q, i) => { const t = G.topicOf(rec.subject, q), o = tmap[t] || (tmap[t] = { t, got: 0, max: 0, n: 0, wrong: 0 }); o.got += per[i]; o.max += q.max; o.n++; if (per[i] < q.max) o.wrong++; });
+    const weak = Object.values(tmap).filter((o) => o.wrong).map((o) => Object.assign(o, { err: 1 - o.got / o.max })).sort((a, b) => b.err - a.err || b.wrong - a.wrong).slice(0, 3);
     app.innerHTML = `<div class="wrap">
       <div class="score-hero">
         <div class="ring" style="--p:${pct};--c:${color}"><div><div><b>${rec.score}</b><span>из 50</span></div></div></div>
@@ -428,6 +484,8 @@
           <div class="cta-row mt"><a class="btn" href="#/tests/${rec.subject}">Следующий вариант</a><a class="btn btn-ghost" href="#/stats">Все результаты</a></div></div>
       </div>
       ${hasAccess() ? '' : `<div class="card row-between" style="margin-bottom:14px"><div><b>Хотите тренироваться дальше?</b><div class="muted" style="font-size:15px">Ещё ${ALLV - NS * C.freeVariants.length} вариантов по ${NS} предметам и безлимитные случайные за ${money(C.price)}</div></div><button class="btn btn-accent" data-pay>Открыть всё</button></div>`}
+      ${weak.length ? `<div class="card" style="margin-bottom:14px"><h3 style="margin-top:0">Больше всего ошибок в темах</h3>${topicRows(weak)}
+        <div class="cta-row mt"><a class="btn btn-sm" href="#/daily/${rec.subject}">⚡ 10 задач по слабым темам</a><a class="btn btn-sm btn-ghost" href="#/stats/${rec.subject}">Вся статистика по темам</a></div></div>` : ''}
       <h2 style="margin:22px 0 4px">Разбор заданий</h2>
       <div class="filters"><button class="btn btn-sm" data-f="all">Все (40)</button><button class="btn btn-sm btn-ghost" data-f="err">Ошибки и пропуски (${wrong})</button></div>
       <div id="rvlist">${qs.map((_, i) => review(i)).join('')}</div>
@@ -441,8 +499,25 @@
   }
 
   // ---------- статистика ----------
-  function pageStats() {
+  function pageStats(subj) {
     const h = history();
+    const ss = statSubjects();
+    subj = ss.includes(subj) ? subj : ss.includes(LS.get(K.subj, '')) ? LS.get(K.subj, '') : ss[0];
+    let topicsHtml = '';
+    if (subj) {
+      const list = topicStats(subj).filter((o) => o.n >= 1);
+      const bad = list.filter((o) => o.wrong);
+      const shown = hasAccess() ? list : bad.slice(0, 1);
+      topicsHtml = `<div class="card" style="margin:16px 0">
+        <h2 style="margin:0 0 4px">Где вы чаще всего ошибаетесь</h2>
+        <p class="muted" style="margin:0;font-size:15px">По всем тестам и задачам дня. Сверху — темы, где больше всего ошибок.</p>
+        ${ss.length > 1 ? `<div class="tabs">${ss.map((k) => `<button class="${k === subj ? 'on' : ''}" data-ts="${k}">${SUBJ[k]}</button>`).join('')}</div>` : `<div class="muted mt" style="font-weight:700">${SUBJ[subj]}</div>`}
+        ${bad.length ? topicRows(shown) : '<p class="mt">Ошибок пока нет — так держать! 👏</p>'}
+        ${!hasAccess() && list.length > 1 ? `<div class="locked-rows"><div class="lr-blur">${topicRows(list.slice(1, 4).map((o) => Object.assign({}, o, { t: '••••••••••' })))}</div>
+          <div class="lr-over"><b>🔒 Ещё ${list.length - 1} ${list.length - 1 === 1 ? 'тема' : list.length - 1 < 5 ? 'темы' : 'тем'} — в полном доступе</b><button class="btn btn-sm btn-accent" data-pay>Открыть за ${money(C.price)}</button></div></div>` : ''}
+        ${bad.length ? `<a class="btn btn-block mt" href="#/daily/${subj}">⚡ Решить 10 задач по слабым темам</a>` : ''}
+      </div>`;
+    }
     const avg = (arr) => (arr.length ? String(Math.round(arr.reduce((a, b) => a + b, 0) / arr.length * 10) / 10).replace('.', ',') : '—');
     const by = (s) => h.filter((x) => x.subject === s).map((x) => x.score);
     app.innerHTML = `<div class="wrap"><div class="page-head"><h1>Мои результаты</h1><p>Результаты хранятся в этом браузере.</p></div>
@@ -450,11 +525,129 @@
         <div class="kpi"><b>${h.length}</b><span>попыток</span></div>
         <div class="kpi"><b>${avg(h.map((x) => x.score))}</b><span>средний балл</span></div>
         ${Object.keys(SUBJ).filter((k) => by(k).length).map((k) => `<div class="kpi"><b>${Math.max(...by(k))}</b><span>лучший · ${SUBJ[k].toLowerCase()}</span></div>`).join('')}</div>
+      ${topicsHtml}
+      <h2 style="margin:22px 0 8px">История попыток</h2>
       <table class="hist"><tr><th>Дата</th><th>Тест</th><th>Балл</th><th></th></tr>
         ${h.map((x) => `<tr><td>${new Date(x.date).toLocaleDateString('ru-RU')}</td><td>${SUBJ[x.subject] || x.subject}<div class="muted" style="font-size:13px">${String(x.variant).startsWith('R') ? 'случайный' : 'вариант ' + x.variant}</div></td>
           <td><b>${x.score}</b>/50<div class="bar"><i style="width:${x.score * 2}%"></i></div></td><td><a href="#/result/${x.id}">Разбор</a></td></tr>`).join('')}
-      </table>` : `<div class="card empty"><p>Пока нет пройденных тестов.</p><a class="btn" href="#/tests">Пройти первый тест</a></div>`}
+      </table>` : topicsHtml || `<div class="card empty"><p>Пока нет пройденных тестов.</p><a class="btn" href="#/tests">Пройти первый тест</a></div>`}
     </div>`;
+    app.querySelectorAll('[data-ts]').forEach((b) => (b.onclick = () => { LS.set(K.subj, b.dataset.ts); location.hash = '#/stats/' + b.dataset.ts; }));
+    app.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = () => paywall('Статистика по всем темам входит в полный доступ.')));
+  }
+
+  // ---------- 10 задач в день (только полный доступ) ----------
+  const today = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const hash32 = (str) => { let x = 2166136261; for (let i = 0; i < str.length; i++) { x ^= str.charCodeAt(i); x = Math.imul(x, 16777619); } return x >>> 0; };
+  function dailyStore() { // храним только последние 7 дней
+    const d = LS.get(K.daily, {}); const keys = Object.keys(d).sort();
+    keys.slice(0, Math.max(0, keys.length - 7)).forEach((k) => delete d[k]);
+    return d;
+  }
+  function makeDaily(subject) {
+    const R = G.H.makeR(hash32(today() + ':' + subject + ':' + vid()));
+    const weak = {}; topicStats(subject).forEach((o) => (weak[o.t] = o));
+    const cand = [], seen = new Set();
+    for (let k = 0; k < 4; k++) {
+      const v = 'R' + R.int(1, 1e9);
+      G.buildVariant(subject, v).questions.forEach((q, i) => {
+        const key = String(q.text).slice(0, 50); if (seen.has(key)) return; seen.add(key);
+        const t = G.topicOf(subject, q), w = weak[t];
+        // слабые темы выпадают чаще, ещё не решённые — тоже почаще, чтобы их проверить
+        cand.push({ v, i, t, w: w && w.n >= 2 ? 0.4 + 3 * w.err : 1.4 });
+      });
+    }
+    const pick = [], per = {};
+    while (pick.length < DAILY_N && cand.length) {
+      const sum = cand.reduce((a, c) => a + c.w, 0); let r = R.f() * sum, j = 0;
+      while (j < cand.length - 1 && (r -= cand[j].w) > 0) j++;
+      const c = cand.splice(j, 1)[0];
+      if ((per[c.t] || 0) >= 3) continue;
+      per[c.t] = (per[c.t] || 0) + 1; pick.push({ v: c.v, i: c.i });
+    }
+    return { items: pick, answers: {}, checked: {}, cur: 0 };
+  }
+  function streak() {
+    const done = new Set(LS.get(K.dailyDone, [])); let n = 0; const d = new Date();
+    const key = (x) => `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`;
+    if (!done.has(key(d))) d.setDate(d.getDate() - 1);
+    while (done.has(key(d))) { n++; d.setDate(d.getDate() - 1); }
+    return n;
+  }
+  const daysWord = (n) => (n % 10 === 1 && n % 100 !== 11 ? 'день' : [2, 3, 4].includes(n % 10) && ![12, 13, 14].includes(n % 100) ? 'дня' : 'дней');
+
+  function pageDaily(subject) {
+    track('daily');
+    subject = SUBJ[subject] ? subject : (SUBJ[LS.get(K.subj, '')] ? LS.get(K.subj, '') : 'math');
+    LS.set(K.subj, subject);
+    const tabs = `<div class="tabs" role="tablist">${Object.entries(SUBJ).map(([k, n]) => `<button class="${k === subject ? 'on' : ''}" data-s="${k}">${n}</button>`).join('')}</div>`;
+    const dateTxt = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+    if (!hasAccess()) {
+      app.innerHTML = `<div class="wrap"><div class="page-head"><h1>⚡ 10 задач в день</h1><p>Каждый день — 10 новых задач по выбранному предмету. Чаще всего попадаются темы, в которых вы ошибаетесь.</p></div>
+        <div class="card daily-lock">
+          <ul class="ticks"><li>10 задач каждый день по каждому из ${NS} предметов</li><li>Подбор по вашим слабым темам</li><li>Сразу видно, верно или нет, и разбор решения</li><li>Серия дней подряд — чтобы не бросить</li><li>Статистика: где вы чаще всего ошибаетесь</li></ul>
+          <div class="row-between mt"><div><b>Входит в полный доступ</b><div class="muted" style="font-size:15px">Разовая оплата ${money(C.price)} через Kaspi</div></div><button class="btn btn-accent" data-pay>Открыть за ${money(C.price)}</button></div>
+        </div></div>`;
+      app.querySelectorAll('[data-pay]').forEach((b) => (b.onclick = () => paywall('«10 задач в день» входит в полный доступ.')));
+      return;
+    }
+    const store = dailyStore(), day = today();
+    store[day] = store[day] || {};
+    const D = store[day][subject] || (store[day][subject] = makeDaily(subject));
+    const save = () => LS.set(K.daily, store);
+    save();
+    const qs = D.items.map((it) => G.buildVariant(subject, it.v).questions[it.i]);
+    const nChecked = () => qs.filter((_, i) => D.checked[i]).length;
+    const nOk = () => qs.filter((q, i) => D.checked[i] && G.scoreQuestion(q, D.answers[i]) === q.max).length;
+
+    function render() {
+      const done = nChecked() === qs.length;
+      const st = streak();
+      const head = `<div class="page-head"><h1>⚡ 10 задач в день</h1><p>${dateTxt} · подобраны по вашим слабым темам${st ? ` · 🔥 серия ${st} ${daysWord(st)}` : ''}</p></div>${tabs}
+        <div class="dprog">${qs.map((q, i) => `<button data-g="${i}" class="${D.checked[i] ? (G.scoreQuestion(q, D.answers[i]) === q.max ? 'ok' : 'bad') : ''} ${i === D.cur && !done ? 'cur' : ''}">${i + 1}</button>`).join('')}</div>`;
+      if (done) {
+        const ok = nOk(); const wrongT = {};
+        qs.forEach((q, i) => { if (G.scoreQuestion(q, D.answers[i]) < q.max) { const t = G.topicOf(subject, q); wrongT[t] = (wrongT[t] || 0) + 1; } });
+        const wl = Object.entries(wrongT).sort((a, b) => b[1] - a[1]);
+        app.innerHTML = `<div class="wrap">${head}<div class="card daily-done">
+          <div class="big">${ok} из ${qs.length}</div><p class="verdict" style="margin:4px 0">${ok >= 9 ? 'Отлично! 🎉' : ok >= 6 ? 'Хорошая работа 👍' : 'Есть над чем поработать 💪'}</p>
+          ${wl.length ? `<p class="muted">Ошибки в темах: ${wl.map(([t, n]) => `<b>${esc(t)}</b>${n > 1 ? ` (${n})` : ''}`).join(', ')}. Завтра этих тем будет больше.</p>` : '<p class="muted">Без ошибок! Завтра будут новые задачи.</p>'}
+          <p class="muted">Новые задачи по этому предмету появятся завтра. А пока можно решить задачи по другому предмету.</p>
+          <div class="cta-row mt"><a class="btn" href="#/stats/${subject}">Статистика по темам</a><button class="btn btn-ghost" data-g="0">Посмотреть задачи</button></div></div></div>`;
+        app.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => (location.hash = '#/daily/' + b.dataset.s)));
+        app.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => { D.cur = +b.dataset.g; D.review = true; save(); render(); }));
+        if (!D.review) return;
+      }
+      app.innerHTML = `<div class="wrap">${head}<div class="qcard" id="q"></div></div>`;
+      app.querySelectorAll('[data-s]').forEach((b) => (b.onclick = () => (location.hash = '#/daily/' + b.dataset.s)));
+      app.querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => { D.cur = +b.dataset.g; save(); render(); }));
+      renderQ();
+    }
+    function renderQ() {
+      const i = D.cur, q = qs[i], a = D.answers[i], chk = !!D.checked[i];
+      const got = chk ? G.scoreQuestion(q, a) : 0;
+      $('#q').innerHTML = `<div class="qmeta"><span class="num">Задача ${i + 1} из ${qs.length}</span><span class="pill">${esc(G.topicOf(subject, q))}</span></div>
+        ${q.context ? `<div class="context">${q.context}</div>` : ''}<div class="qtext">${q.text}</div>
+        ${chk ? `${reviewBody(q, a)}<div class="dres ${got === q.max ? 'ok' : got ? 'mid' : 'bad'}">${got === q.max ? '✓ Верно!' : got ? '◐ Частично верно' : '✗ Неверно'}</div><div class="explain"><b>Решение</b>${q.explain}</div>` : qBody(q, a)}
+        <div class="qnav">${chk ? `<span></span><button class="btn" id="dnext">${nChecked() === qs.length ? 'К итогам' : 'Следующая →'}</button>` : `<span></span><button class="btn btn-ok" id="dcheck" ${isAnswered(a) ? '' : 'disabled'}>Проверить</button>`}</div>`;
+      if (!chk) bindBody($('#q'), q, () => D.answers[i], (v) => { D.answers[i] = v; save(); renderQ(); });
+      if ($('#dcheck')) $('#dcheck').onclick = () => {
+        D.checked[i] = true; save();
+        const g = G.scoreQuestion(q, D.answers[i]);
+        const log = LS.get(K.tlog, []); log.push({ s: subject, t: G.topicOf(subject, q), g, m: q.max, d: Date.now() }); LS.set(K.tlog, log.slice(-3000));
+        if (nChecked() === qs.length) { D.review = true; save(); const dd = LS.get(K.dailyDone, []); if (!dd.includes(day)) { dd.push(day); LS.set(K.dailyDone, dd.slice(-400)); } track('daily_done'); }
+        render();
+      };
+      if ($('#dnext')) $('#dnext').onclick = () => {
+        const next = qs.findIndex((_, k) => !D.checked[k]);
+        if (next < 0) { D.review = false; save(); render(); return; }
+        D.cur = next; save(); render();
+      };
+      if (window.innerWidth < 860) window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+    if (!D.checked[D.cur]) { const n0 = qs.findIndex((_, k) => !D.checked[k]); if (n0 >= 0) D.cur = n0; }
+    D.review = false;
+    render();
   }
 
   // ---------- роутер ----------
@@ -468,7 +661,8 @@
       case 'tests': pageTests(parts[1]); break;
       case 'run': pageRun(); break;
       case 'result': pageResult(parts[1]); break;
-      case 'stats': pageStats(); break;
+      case 'stats': pageStats(parts[1]); break;
+      case 'daily': pageDaily(parts[1]); break;
       default: pageHome();
     }
     if (parts[0] !== 'run') window.scrollTo(0, 0);
