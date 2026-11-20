@@ -107,6 +107,8 @@
     }
     return { total: TICKET_N, next() { if (!tk) build(); return i < tk.length ? tk[i++] : null; } };
   }
+  /* здоровье босса подогнано под билет: хороший игрок добивает босса ближе к сложным вопросам, а при частых ошибках 25 вопросов не хватает */
+  const ticketHp = (B) => Math.round(420 * B.hp / 100 / 10) * 10;
   const LETTERS = 'ABCDEF';
   const ansText = (q) => q.type === 'multi' ? q.answer.map((k) => `${LETTERS[k]}) ${q.options[k]}`).join('; ') : `${LETTERS[q.answer]}) ${q.options[q.answer]}`;
   const isMulti = (q) => q && q.type === 'multi';
@@ -302,7 +304,7 @@
         if (isMulti(q)) { j.forEach((k) => $('#aOpts', root).children[k].classList.add('ok')); $('#aSub', root).style.display = 'none'; } else btn.classList.add('ok');
         F.ok++; F.combo++; F.maxCombo = Math.max(F.maxCombo, F.combo);
         const mult = (1 + 0.1 * Math.min(F.combo - 1, 5)) * (1 + 0.25 * (F.lv - 1)) * (F.dbl ? 2 : 1), crit = F.dbl || F.combo >= 5 || F.lv >= 3;
-        const dmg = Math.round((10 + 6 * speed) * mult * [1, 1, 1.2, 1.5][q.lvl || 1]), push = (0.22 + 0.1 * speed + 0.05 * (F.lv - 1)) * (F.dbl ? 1.8 : 1);
+        const dmg = Math.round([0, 5, 7, 11][q.lvl || 1] * (0.8 + 0.4 * speed) * mult), push = (0.22 + 0.1 * speed + 0.05 * (F.lv - 1)) * (F.dbl ? 1.8 : 1);
         F.dbl = false;
         orb(center(btn), () => {
           anim(heroEl, 'charge', 260); F.charge = 1;
@@ -495,7 +497,7 @@
     if (!unlocked(B, s)) { location.hash = '#/boss'; H.toast('Финал откроется после 3 побед'); return; }
     document.body.classList.add('arena-on', 'arena-fight');
     H.track && H.track('boss');
-    cur = Fight({ boss: B, seed: Date.now() % 1e9, hpMax: B.hp, root: H.app, raid: null, onEnd: (r) => soloEnd(r) });
+    cur = Fight({ boss: B, seed: Date.now() % 1e9, hpMax: ticketHp(B), root: H.app, raid: null, onEnd: (r) => soloEnd(r) });
   }
 
   function soloEnd(r) {
@@ -602,7 +604,7 @@
 
   /* ---------- рейд ---------- */
   const newCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), (b) => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
-  const raidHp = (B, n) => Math.round(B.hp * (0.5 + 0.5 * n) / 10) * 10;
+  const raidHp = (B, n) => Math.round(ticketHp(B) * (0.5 + 0.5 * n) / 10) * 10;
 
   function pageRaid(code) {
     if (!/^[a-z0-9]{4,10}$/.test(code || '')) { const c = newCode(); H.LS.set('synaq_raid_host', c); location.replace('#/raid/' + c); return; }
