@@ -267,6 +267,7 @@
           <a class="btn btn-lg" href="#/tests">Пройти бесплатно</a>
           <button class="btn btn-lg btn-ghost" data-pay>Полный доступ — ${money(C.price)}</button>
         </div>
+        ${window.SynaqBoss ? `<a class="home-boss" href="#/boss"><img src="${window.SynaqBoss.imgOf('physics')}" alt=""><div><b>⚔️ Битва с боссами</b><span>Отвечай на задания ЕНТ и бей боссов. Можно с друзьями по ссылке. Бесплатно.</span></div></a>` : ''}
         <div class="chips"><span class="chip">${NS} предметов</span><span class="chip">25 + 5 + 5 + 5 заданий</span><span class="chip">Максимум 50 баллов</span><span class="chip">Таймер ${C.durationMin} мин</span><span class="chip">Работает с телефона</span></div>
       </div>
       <div class="mock" aria-hidden="true">
@@ -651,11 +652,13 @@
   }
 
   // ---------- роутер ----------
+  const bossHelpers = { app, LS, esc, toast, paywall: (r) => paywall(r), hasAccess, track: (e) => track(e) };
   function route() {
     clearInterval(timerId);
+    if (window.SynaqBoss) window.SynaqBoss.leave();
     document.body.classList.remove('testing');
     const parts = (location.hash || '#/').slice(2).split('/');
-    document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === parts[0] || (parts[0] === 'run' && a.dataset.nav === 'tests')));
+    document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('active', a.dataset.nav === parts[0] || (parts[0] === 'run' && a.dataset.nav === 'tests') || (parts[0] === 'raid' && a.dataset.nav === 'boss')));
     refreshHeader();
     switch (parts[0]) {
       case 'tests': pageTests(parts[1]); break;
@@ -663,6 +666,7 @@
       case 'result': pageResult(parts[1]); break;
       case 'stats': pageStats(parts[1]); break;
       case 'daily': pageDaily(parts[1]); break;
+      case 'boss': case 'raid': if (window.SynaqBoss) { window.SynaqBoss.route(parts, bossHelpers); break; } pageHome(); break;
       default: pageHome();
     }
     if (parts[0] !== 'run') window.scrollTo(0, 0);
