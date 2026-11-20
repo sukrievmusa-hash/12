@@ -27,8 +27,8 @@
   const SUBJ_NAME = { math: 'математика', physics: 'физика', informatics: 'информатика', chemistry: 'химия', biology: 'биология', geography: 'география' };
   const ITEMS = {
     cheat: { i: '📜', name: 'Шпаргалка', what: 'убирает 2 неверных ответа' },
-    freeze: { i: '❄️', name: 'Стоп-время', what: 'останавливает заряд босса на этот вопрос' },
-    double: { i: '⚔️', name: 'Двойной удар', what: 'следующий верный ответ бьёт ×2' },
+    freeze: { i: '🛡️', name: 'Упор', what: 'батыр упирается: босс не давит на этом вопросе' },
+    double: { i: '💥', name: 'Рывок', what: 'следующий толчок ×2' },
   };
   const AVS = ['🦊', '🐼', '🐯', '🦁', '🐸', '🐵', '🦉', '🐺', '🐲', '🤖', '👾', '🧠', '🚀', '⚡'];
   const HEARTS = 3, RAID_SEC = 240;
@@ -98,14 +98,34 @@
     return { next() { if (i >= pool.length) refill(); return pool[i++]; } };
   }
 
-  /* ---------- бой ---------- */
-  // opts: boss, seed, hpMax, root, raid: { teamDmg(), onDamage(myDmg), onOut(), mates() } | null, onEnd(result)
+  /* ---------- бой: 2D-схватка ----------
+     Батыр и босс упёрлись друг в друга в центре. Босс всё время давит — точка схватки ползёт к краю батыра.
+     Верный ответ: батыр получает силу и толкает (урон боссу). Ошибка: босс делает рывок.
+     Батыра вытолкнули за край — минус сердце. Босса вытолкнули за его край — «ринг-аут», большой урон. */
+  const LV = [null,
+    { n: 1, h0: '#bfdbfe', h1: '#3b82f6', h2: '#1e3a8a', hg: '#60a5fa' },
+    { n: 2, h0: '#cffafe', h1: '#06b6d4', h2: '#164e63', hg: '#22d3ee' },
+    { n: 3, h0: '#fef3c7', h1: '#f59e0b', h2: '#78350f', hg: '#fb923c' }];
+  let grind = null;
+  function grindOn() {
+    const c = audio(); if (!c || grind) return;
+    const n = c.sampleRate * 2, buf = c.createBuffer(1, n, c.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = buf; s.loop = true; f.type = 'bandpass'; f.frequency.value = 600; f.Q.value = 3; g.gain.value = 0;
+    s.connect(f).connect(g).connect(c.destination); s.start(); grind = { s, f, g };
+  }
+  function grindSet(level) { if (!grind || !ac) return; const t = ac.currentTime; grind.g.gain.setTargetAtTime(0.01 + 0.06 * level, t, 0.15); grind.f.frequency.setTargetAtTime(450 + 900 * level, t, 0.2); }
+  function grindOff() { if (!grind) return; try { grind.s.stop(); } catch (e) { /* */ } grind = null; }
+
+  // opts: boss, seed, hpMax, root, raid: { teamDmg(), onDamage(myDmg), onOut(), mates(), left() } | null, onEnd(result), heroName
   function Fight(opts) {
     const B = opts.boss, root = opts.root;
-    const F = { hearts: HEARTS, combo: 0, maxCombo: 0, ok: 0, tot: 0, myDmg: 0, wrongs: [], items: { cheat: 1, freeze: 1, double: 1 }, dbl: false, rage: false, over: false, t0: performance.now(), q: null };
+    const F = { hearts: HEARTS, combo: 0, maxCombo: 0, ok: 0, tot: 0, myDmg: 0, wrongs: [], items: { cheat: 1, freeze: 1, double: 1 }, dbl: false, rage: false, over: false, t0: performance.now(), q: null, lv: 1, pw: 0, p: 0, pt: 0 };
     const deck = Deck(B.subj, opts.seed);
     const hp = () => opts.hpMax - (opts.raid ? opts.raid.teamDmg() : F.myDmg);
-    let raf = 0, qStart = 0, limit = 30, frozen = false, locked = false, lastTick = 0, timers = [];
+    const heroName = opts.heroName || 'Батыр';
+    let raf = 0, limit = 30, frozen = false, locked = false, lastTick = 0, lastSpark = 0, timers = [], tPrev = performance.now(), edgeLock = false;
     const later = (fn, ms) => { const t = setTimeout(() => { if (!F.dead) fn(); }, ms); timers.push(t); return t; };
 
     root.innerHTML = `
@@ -117,20 +137,25 @@
         <div class="ar-row2"><span class="ar-hearts" id="aHearts"></span><span class="ar-combo" id="aCombo"></span><span class="ar-clock" id="aClock">0:00</span></div>
       </div>
       ${opts.raid ? '<div class="ar-team" id="aTeam"></div>' : ''}
-      <div class="ar-stage" id="aStage">
+      <div class="ar-ring" id="aStage">
         <div class="ar-say" id="aSay"></div>
-        <div class="ar-boss" id="aBoss">${ART[B.k]}</div>
-        <div class="ar-charge" id="aCharge"><div class="lbl"><span id="aChL">⚡ Удар босса</span><span id="aChS"></span></div><div class="bar"><i id="aChB"></i></div></div>
+        <div class="ar-zone l" id="aZoneL"></div><div class="ar-zone r"></div>
+        <div class="ar-floor"></div>
+        <div class="ar-fighter ally" id="aHero"><div class="ar-body">${ART.hero}</div><span class="ar-tag" id="aTag"></span></div>
+        <div class="ar-fighter foe" id="aBoss"><div class="ar-body">${ART[B.k]}</div></div>
+        <div class="ar-clash" id="aClash"></div>
       </div>
+      <div class="ar-tug"><span class="z l">край</span><div class="tr"><i class="mid"></i><b id="aKnob"></b></div><span class="z r">ринг-аут</span></div>
+      <div class="ar-power" id="aPower"><span id="aLv"></span><div class="bar"><i id="aPow"></i></div><span id="aPress"></span></div>
       <div class="ar-q" id="aQ"></div>
       <div class="ar-pw" id="aPw"></div>
       <div class="ar-fx" id="aFx"></div><div class="ar-banner" id="aBan"></div><div class="ar-flash"></div>
     </div></div>`;
-    const arena = $('#arena', root), bossEl = $('#aBoss', root), fx = $('#aFx', root);
+    const arena = $('#arena', root), stage = $('#aStage', root), heroEl = $('#aHero', root), bossEl = $('#aBoss', root), fx = $('#aFx', root);
     arena._F = F;
     const renderSnd = () => ($('#aSnd', root).textContent = st().sound ? '🔊' : '🔇');
     renderSnd();
-    $('#aSnd', root).onclick = () => { const s = st(); s.sound = !s.sound; saveSt(s); renderSnd(); };
+    $('#aSnd', root).onclick = () => { const s = st(); s.sound = !s.sound; saveSt(s); renderSnd(); if (s.sound) grindOn(); else grindOff(); };
     $('#aX', root).onclick = () => {
       if (F.over || F.exitArm) { F.stop(); opts.onExit ? opts.onExit() : (location.hash = '#/boss'); return; }
       F.exitArm = true; banner('Ещё раз × — выйти', 1500); setTimeout(() => (F.exitArm = false), 2500);
@@ -138,12 +163,20 @@
 
     function say(text, ms = 2600) { const s = $('#aSay', root); if (!text) return; s.textContent = text; s.classList.add('on'); clearTimeout(say.t); say.t = setTimeout(() => s.classList.remove('on'), ms); }
     function banner(text, ms = 1100) { const b = $('#aBan', root); b.textContent = text; b.classList.toggle('sm', text.length > 12); b.classList.add('on'); clearTimeout(banner.t); banner.t = setTimeout(() => b.classList.remove('on'), ms); }
+    function setLevel(n) {
+      F.lv = n; const L = LV[n];
+      ['h0', 'h1', 'h2', 'hg'].forEach((k) => heroEl.style.setProperty('--' + k, L[k]));
+      heroEl.classList.remove('lv1', 'lv2', 'lv3'); heroEl.classList.add('lv' + n);
+    }
     function hud() {
       const h = Math.max(0, hp()), pct = clamp(h / opts.hpMax * 100, 0, 100);
       $('#aHp', root).style.width = pct + '%'; $('#aLag', root).style.width = pct + '%';
       $('#aHpN', root).textContent = `${Math.ceil(h)} / ${opts.hpMax}`;
       $('#aHearts', root).innerHTML = Array.from({ length: HEARTS }, (_, i) => `<span class="${i < F.hearts ? '' : 'off'}">❤️</span>`).join('');
       $('#aCombo', root).textContent = F.combo >= 2 ? `🔥 Комбо ×${F.combo}` : '';
+      $('#aTag', root).textContent = `${heroName} · ур. ${F.lv}`;
+      $('#aLv', root).textContent = F.lv >= 3 ? '⚡ Сила: МАКС' : `⚡ Сила · ур. ${F.lv}`;
+      $('#aPow', root).style.width = (F.lv >= 3 ? 100 : F.pw / 3 * 100) + '%';
       $('#aPw', root).innerHTML = Object.entries(ITEMS).map(([k, it]) => `<button data-it="${k}" ${F.items[k] && !locked && !F.over ? '' : 'disabled'} title="${it.what}"><span class="i">${it.i}</span>${it.name}${F.items[k] ? `<span class="n">${F.items[k]}</span>` : ''}</button>`).join('');
       $('#aPw', root).querySelectorAll('[data-it]').forEach((b) => (b.onclick = () => useItem(b.dataset.it)));
       if (!F.rage && h <= opts.hpMax / 2 && h > 0) { F.rage = true; arena.classList.add('rage'); banner('ЯРОСТЬ!'); say(B.rage); SFX.rage(); }
@@ -156,22 +189,36 @@
     F.renderTeam = renderTeam;
     F.hud = hud;
 
+    /* раскладка бойцов: точка схватки x = центр + p · RANGE */
+    function layout() {
+      const W = stage.clientWidth, hw = heroEl.offsetWidth, bw = bossEl.offsetWidth;
+      const jit = F.over ? 0 : (Math.random() - 0.5) * (1.2 + 2.2 * Math.max(0, -F.p));
+      const X = W / 2 + F.p * W * 0.26;
+      heroEl.style.transform = `translateX(${X - hw * 0.86 + jit}px)`;
+      bossEl.style.transform = `translateX(${X - bw * 0.1 - jit}px)`;
+      $('#aClash', root).style.left = X + 'px';
+      $('#aKnob', root).style.left = clamp(50 + F.p * 50, 0, 100) + '%';
+      $('#aZoneL', root).style.opacity = clamp(-F.p * 1.2 - 0.2, 0, 1);
+      return X;
+    }
     function center(el) { const a = arena.getBoundingClientRect(), r = el.getBoundingClientRect(); return { x: r.left - a.left + r.width / 2, y: r.top - a.top + r.height / 2 }; }
+    function clashPt() { const a = arena.getBoundingClientRect(), r = $('#aClash', root).getBoundingClientRect(); return { x: r.left - a.left, y: r.top - a.top }; }
     function floatText(text, cls, x, y) {
       const d = document.createElement('div'); d.className = 'ar-dmg ' + (cls || ''); d.textContent = text; d.style.left = x + 'px'; d.style.top = y + 'px'; fx.append(d);
       d.animate([{ transform: 'translate(-50%,0) scale(.5)', opacity: 0 }, { transform: 'translate(-50%,-30px) scale(1.15)', opacity: 1, offset: 0.25 }, { transform: 'translate(-50%,-90px) scale(1)', opacity: 0 }], { duration: 1100, easing: 'ease-out' }).onfinish = () => d.remove();
     }
-    function sparks(x, y, n, color) {
+    function sparks(x, y, n, color, spread = 1) {
       for (let i = 0; i < n; i++) {
         const s = document.createElement('div'); s.className = 'ar-spark'; s.style.left = x + 'px'; s.style.top = y + 'px'; if (color) s.style.background = color; fx.append(s);
-        const a = Math.random() * Math.PI * 2, r = 40 + Math.random() * 90;
-        s.animate([{ transform: 'translate(0,0) rotate(0)', opacity: 1 }, { transform: `translate(${Math.cos(a) * r}px,${Math.sin(a) * r}px) rotate(${Math.random() * 360}deg)`, opacity: 0 }], { duration: 500 + Math.random() * 400, easing: 'cubic-bezier(.2,.7,.3,1)' }).onfinish = () => s.remove();
+        const a = -Math.PI / 2 + (Math.random() - 0.5) * Math.PI * 1.6, r = (25 + Math.random() * 70) * spread;
+        s.animate([{ transform: 'translate(0,0)', opacity: 1 }, { transform: `translate(${Math.cos(a) * r}px,${Math.sin(a) * r + 30}px) rotate(${Math.random() * 360}deg)`, opacity: 0 }], { duration: 400 + Math.random() * 400, easing: 'cubic-bezier(.2,.7,.3,1)' }).onfinish = () => s.remove();
       }
     }
-    function shot(from, cb) {
-      const to = center(bossEl), s = document.createElement('div'); s.className = 'ar-shot'; fx.append(s); SFX.shot();
-      s.animate([{ left: from.x + 'px', top: from.y + 'px', transform: 'scale(.6)' }, { left: to.x + 'px', top: to.y + 'px', transform: 'scale(1.4)' }], { duration: 340, easing: 'cubic-bezier(.5,0,.9,.4)' }).onfinish = () => { s.remove(); cb(to); };
+    function orb(from, cb) { // сила от ответа летит в батыра
+      const to = center(heroEl), s = document.createElement('div'); s.className = 'ar-shot'; fx.append(s); SFX.shot();
+      s.animate([{ left: from.x + 'px', top: from.y + 'px', transform: 'scale(.6)' }, { left: to.x + 'px', top: to.y + 'px', transform: 'scale(1.3)' }], { duration: 300, easing: 'cubic-bezier(.5,0,.9,.4)' }).onfinish = () => { s.remove(); cb(); };
     }
+    const anim = (el, cls, ms) => { el.classList.remove(cls); void el.offsetWidth; el.classList.add(cls); later(() => el.classList.remove(cls), ms); };
 
     function ask() {
       if (F.over || F.dead) return;
@@ -179,66 +226,88 @@
       const q = (F.q = deck.next());
       F.tot++;
       const len = strip(q.text).length + strip(q.context).length + q.options.map(strip).join('').length;
-      limit = clamp(14 + len / 8, 18, 50) * (F.rage ? 0.8 : 1);
-      qStart = performance.now();
-      const qn = F.tot;
-      $('#aQ', root).innerHTML = `<div class="meta"><span>Вопрос ${qn}${B.subj.length > 1 ? ' · ' + SUBJ_NAME[q.subj] : ''}</span><span>${q.type === 'context' ? 'контекстное' : 'один ответ'}</span></div>
+      limit = clamp(14 + len / 8, 18, 50);
+      $('#aQ', root).innerHTML = `<div class="meta"><span>Вопрос ${F.tot}${B.subj.length > 1 ? ' · ' + SUBJ_NAME[q.subj] : ''}</span><span>помоги батыру — ответь верно</span></div>
         ${q.context ? `<div class="ctx">${q.context}</div>` : ''}<div class="qt">${q.text}</div>
         <div class="ar-opts" id="aOpts">${q.options.map((o, j) => `<button class="ar-opt" data-o="${j}"><span class="k">${'ABCD'[j]}</span><span>${o}</span></button>`).join('')}</div><div id="aExp"></div>`;
       $('#aQ', root).querySelectorAll('[data-o]').forEach((b) => (b.onclick = () => answer(+b.dataset.o, b)));
-      $('#aCharge', root).classList.remove('frozen', 'hot');
+      arena.classList.remove('frozen');
       hud();
     }
 
     function answer(j, btn) {
       if (locked || F.over) return;
       locked = true;
-      const q = F.q, p = clamp((performance.now() - qStart) / (limit * 1000), 0, 1), ok = j === q.answer;
-      const opts2 = $('#aOpts', root); opts2.classList.add('lock');
+      const q = F.q, ok = j === q.answer;
+      const tUsed = (performance.now() - (F.qStart || performance.now())) / 1000, speed = clamp(1 - tUsed / limit, 0, 1);
+      $('#aOpts', root).classList.add('lock');
       logTopic(q, ok);
       if (ok) {
         btn.classList.add('ok'); F.ok++; F.combo++; F.maxCombo = Math.max(F.maxCombo, F.combo);
-        const mult = 1 + 0.1 * Math.min(F.combo - 1, 5), crit = F.dbl || F.combo >= 5;
-        const dmg = Math.round((12 + 6 * (1 - p)) * mult * (F.dbl ? 2 : 1));
+        const mult = (1 + 0.1 * Math.min(F.combo - 1, 5)) * (1 + 0.25 * (F.lv - 1)) * (F.dbl ? 2 : 1), crit = F.dbl || F.combo >= 5 || F.lv >= 3;
+        const dmg = Math.round((10 + 6 * speed) * mult), push = (0.22 + 0.1 * speed + 0.05 * (F.lv - 1)) * (F.dbl ? 1.8 : 1);
         F.dbl = false;
-        shot(center(btn), (to) => {
-          F.myDmg += dmg; if (opts.raid) opts.raid.onDamage(F.myDmg);
-          bossEl.classList.remove('hit'); void bossEl.offsetWidth; bossEl.classList.add('hit');
-          floatText((crit ? 'КРИТ −' : '−') + dmg, crit ? 'crit' : '', to.x, to.y - 40); sparks(to.x, to.y, crit ? 22 : 12);
-          (crit ? SFX.crit : SFX.hit)(); vib(crit ? [20, 30, 40] : 25);
-          if (F.combo % 3 === 0) reward();
-          hud();
-          if (hp() <= 0) return win();
-          later(ask, 650);
+        orb(center(btn), () => {
+          anim(heroEl, 'charge', 260);
+          if (F.lv < 3 && ++F.pw >= 3) { F.pw = 0; setLevel(F.lv + 1); banner(F.lv >= 3 ? '⚡ БАТЫР НА МАКСИМУМЕ!' : `⚡ Батыр сильнее! Ур. ${F.lv}`, 1300); SFX.item(); vib([20, 40, 20]); }
+          later(() => {
+            F.pt = F.p + push; anim(heroEl, 'shove', 380); anim(bossEl, 'hit', 380);
+            F.myDmg += dmg; if (opts.raid) opts.raid.onDamage(F.myDmg);
+            const c = clashPt(); floatText((crit ? 'КРИТ −' : '−') + dmg, crit ? 'crit' : '', c.x + 40, c.y - 70); sparks(c.x, c.y, crit ? 26 : 14);
+            arena.classList.remove('bump'); void arena.offsetWidth; arena.classList.add('bump');
+            (crit ? SFX.crit : SFX.hit)(); vib(crit ? [20, 30, 40] : 25);
+            if (F.combo % 3 === 0) reward();
+            hud();
+            if (hp() <= 0) return win();
+            later(ask, 600);
+          }, 140);
         });
       } else {
-        btn.classList.add('bad'); opts2.children[q.answer].classList.add('ok');
-        miss(j);
+        btn.classList.add('bad'); $('#aOpts', root).children[q.answer].classList.add('ok');
+        F.pw = Math.max(0, F.pw - 1); F.combo = 0;
+        lunge(0.38);
+        if (!F.over) miss(j);
       }
       hud();
     }
+    function lunge(k) { // рывок босса
+      anim(bossEl, 'lunge', 420); anim(heroEl, 'recoil', 420);
+      F.pt = F.p - k; SFX.hurt(); vib(50);
+      const c = clashPt(); sparks(c.x, c.y, 10, '#fca5a5');
+    }
     function miss(j) {
       const q = F.q; F.combo = 0; F.wrongs.push({ q, a: j });
-      strike(j === null ? 'Время вышло!' : null);
-      if (F.over) return;
-      $('#aExp', root).innerHTML = `<div class="ar-exp">${j === null ? '<b>Не успели.</b> ' : ''}Верный ответ: <b style="color:#15803d">${'ABCD'[q.answer]}) ${q.options[q.answer]}</b><div style="margin-top:6px">${q.explain || ''}</div>
+      $('#aExp', root).innerHTML = `<div class="ar-exp">${j === null ? '<b>Не успели — босс вытолкнул.</b> ' : '<b>Ошибка — босс давит!</b> '}Верный ответ: <b style="color:#15803d">${'ABCD'[q.answer]}) ${q.options[q.answer]}</b><div style="margin-top:6px">${q.explain || ''}</div>
         <button class="ar-btn blue" id="aNext" style="margin-top:10px;width:100%">Дальше →</button></div>`;
       $('#aNext', root).onclick = () => ask();
       later(() => { const e = $('#aExp', root); if (e && e.scrollIntoView && window.innerHeight < 760) e.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 120);
+      hud();
     }
-    function strike(text) {
-      bossEl.classList.add('atk');
-      later(() => {
-        bossEl.classList.remove('atk');
-        F.hearts--; arena.classList.remove('hurt'); void arena.offsetWidth; arena.classList.add('hurt'); SFX.hurt(); vib([60, 40, 90]);
-        const c = center(bossEl); floatText(text || '−❤️', 'crit', c.x, c.y + 70);
-        hud();
-        if (F.hearts <= 0) lose();
-      }, 260);
+    function pushedOut() { // батыра вытолкнули за край
+      edgeLock = true; F.hearts--;
+      arena.classList.remove('hurt'); void arena.offsetWidth; arena.classList.add('hurt'); SFX.hurt(); vib([60, 40, 90]);
+      anim(heroEl, 'knock', 700);
+      const c = center(heroEl); floatText('−❤️', 'crit', c.x, c.y - 30);
+      banner(F.hearts > 0 ? 'Батыра вытолкнули!' : 'Батыр повержен', 1200);
+      const unanswered = !locked && F.q;
+      if (unanswered) { locked = true; logTopic(F.q, false); $('#aOpts', root).classList.add('lock'); $('#aOpts', root).children[F.q.answer].classList.add('ok'); }
+      hud();
+      if (F.hearts <= 0) return lose();
+      later(() => { F.p = F.pt = 0; edgeLock = false; }, 650);
+      if (unanswered) miss(null);
+    }
+    function ringOut() {
+      edgeLock = true; const bonus = Math.round(18 * (1 + 0.25 * (F.lv - 1)));
+      F.myDmg += bonus; if (opts.raid) opts.raid.onDamage(F.myDmg);
+      anim(bossEl, 'out', 700); banner('РИНГ-АУТ!', 1100); SFX.crit(); vib([30, 30, 60]);
+      const c = center(bossEl); floatText('−' + bonus, 'crit', c.x, c.y - 40); sparks(c.x, c.y + 40, 24, B.c, 1.4);
+      hud();
+      if (hp() <= 0) return win();
+      later(() => { F.pt = 0.15; edgeLock = false; }, 650);
     }
     function reward() {
       const keys = Object.keys(ITEMS), k = keys[Math.floor(Math.random() * keys.length)];
-      F.items[k]++; SFX.item(); banner(`+ ${ITEMS[k].i} ${ITEMS[k].name}`, 1200);
+      F.items[k]++; SFX.item(); later(() => banner(`+ ${ITEMS[k].i} ${ITEMS[k].name}`, 1200), 500);
       hud(); const b = $(`[data-it="${k}"]`, root); if (b) b.classList.add('pop');
     }
     function useItem(k) {
@@ -247,8 +316,8 @@
       if (k === 'cheat') {
         const wrong = [0, 1, 2, 3].filter((i) => i !== F.q.answer); wrong.sort(() => Math.random() - 0.5);
         wrong.slice(0, 2).forEach((i) => $('#aOpts', root).children[i].classList.add('gone'));
-      } else if (k === 'freeze') { frozen = true; $('#aCharge', root).classList.add('frozen'); banner('❄️ Время стоит'); }
-      else if (k === 'double') { F.dbl = true; banner('⚔️ Следующий удар ×2'); }
+      } else if (k === 'freeze') { frozen = true; arena.classList.add('frozen'); banner('🛡️ Батыр упёрся'); }
+      else if (k === 'double') { F.dbl = true; banner('💥 Следующий толчок ×2'); }
       hud();
     }
     function logTopic(q, ok) {
@@ -258,52 +327,50 @@
     function tick() {
       if (F.dead) return;
       raf = requestAnimationFrame(tick);
-      const now = performance.now();
+      const now = performance.now(), dt = Math.min(0.05, (now - tPrev) / 1000); tPrev = now;
       $('#aClock', root).textContent = opts.raid ? mmss(Math.max(0, opts.raid.left())) : mmss((now - F.t0) / 1000);
       if (opts.raid && !F.over) {
         if (hp() <= 0) return win();
         if (opts.raid.left() <= 0) return lose(true);
       }
-      if (F.over || locked || !F.q) return;
-      if (frozen) { qStart += now - (tick.last || now); }
-      tick.last = now;
-      const p = (now - qStart) / (limit * 1000), left = Math.max(0, limit - (now - qStart) / 1000);
-      $('#aChB', root).style.width = clamp(p * 100, 0, 100) + '%';
-      $('#aChS', root).textContent = frozen ? '❄️ стоп' : Math.ceil(left) + ' с';
-      const hot = p > 0.75 && !frozen; $('#aCharge', root).classList.toggle('hot', hot);
-      if (hot && now - lastTick > 1000) { lastTick = now; SFX.tick(); }
-      if (p >= 1 && !frozen) {
-        locked = true; logTopic(F.q, false);
-        $('#aOpts', root).classList.add('lock'); $('#aOpts', root).children[F.q.answer].classList.add('ok');
-        miss(null); hud();
-      }
+      const pressing = !F.over && !locked && !frozen && F.q && !edgeLock;
+      if (pressing) F.pt -= dt / limit * (F.rage ? 1.3 : 1);
+      if (!F.qStart || F.qStartFor !== F.q) { F.qStart = now; F.qStartFor = F.q; }
+      F.p += (F.pt - F.p) * Math.min(1, dt * 10);
+      const X = layout();
+      $('#aPress', root).textContent = frozen ? '🛡️ упор' : pressing ? (F.p < -0.6 ? '⚠️ край!' : 'босс давит') : '';
+      grindSet(F.over ? 0 : clamp(0.3 - F.p * 0.5, 0, 1));
+      if (!F.over && now - lastSpark > (pressing ? 140 : 300)) { lastSpark = now; const a = arena.getBoundingClientRect(), r = stage.getBoundingClientRect(); sparks(X + r.left - a.left, r.top - a.top + stage.clientHeight * 0.52, 2, '#fde68a', 0.5); }
+      if (pressing && F.p < -0.7 && now - lastTick > 700) { lastTick = now; SFX.tick(); }
+      if (!F.over && !edgeLock && F.p <= -1) pushedOut();
+      else if (!F.over && !edgeLock && F.p >= 1) ringOut();
     }
 
     function finish(res) {
-      F.over = true; locked = true; hud();
+      F.over = true; locked = true; hud(); grindSet(0);
       const sec = (performance.now() - F.t0) / 1000;
-      later(() => { F.stop(); opts.onEnd(Object.assign({ boss: B, sec, hearts: Math.max(0, F.hearts), ok: F.ok, tot: F.tot, maxCombo: F.maxCombo, dmg: F.myDmg, wrongs: F.wrongs }, res)); }, res.win ? 2300 : 2000);
+      later(() => { F.stop(); opts.onEnd(Object.assign({ boss: B, sec, hearts: Math.max(0, F.hearts), ok: F.ok, tot: F.tot, maxCombo: F.maxCombo, dmg: F.myDmg, wrongs: F.wrongs, lv: F.lv }, res)); }, res.win ? 2300 : 2000);
     }
     function win() {
       if (F.over) return;
-      const c = center(bossEl); bossEl.classList.add('dead'); say(B.die, 2000); sparks(c.x, c.y, 40, B.c); SFX.win(); vib([40, 60, 40, 60, 120]);
+      const c = center(bossEl); bossEl.classList.add('dead'); heroEl.classList.add('victory'); say(B.die, 2000); sparks(c.x, c.y, 40, B.c, 1.5); SFX.win(); vib([40, 60, 40, 60, 120]);
       later(() => banner('ПОБЕДА!', 1600), 500);
       finish({ win: true });
     }
     function lose(timeUp) {
       if (F.over) return;
       if (opts.raid && !timeUp && opts.raid.onOut) { // в рейде: выбыл, команда бьётся дальше
-        F.over = true; locked = true; banner('Вы выбыли', 1600); SFX.lose();
-        $('#aQ', root).innerHTML = `<div style="text-align:center;padding:8px 0"><div style="font-size:34px">💤</div><b>Босс вас вырубил.</b><div class="muted" style="color:#64748b;font-size:14px">Команда ещё бьётся, следите за полоской здоровья.</div></div>`;
+        F.over = true; locked = true; heroEl.classList.add('down'); SFX.lose(); grindSet(0);
+        $('#aQ', root).innerHTML = `<div style="text-align:center;padding:8px 0"><div style="font-size:34px">💤</div><b>Ваш батыр выбыл.</b><div style="color:#64748b;font-size:14px">Команда ещё бьётся — следите за полоской здоровья босса.</div></div>`;
         hud(); opts.raid.onOut(F);
         return;
       }
-      bossEl.classList.add('win'); say(B.win, 2400); SFX.lose();
+      heroEl.classList.add('down'); bossEl.classList.add('win'); say(B.win, 2400); SFX.lose();
       later(() => banner(timeUp ? 'ВРЕМЯ ВЫШЛО' : 'ПОРАЖЕНИЕ', 1600), 400);
       finish({ win: false, timeUp: !!timeUp });
     }
     F.forceEnd = (w) => { if (w) { if (!F.ended) { F.ended = true; F.over = false; win(); } } else { F.over = false; finish({ win: false, timeUp: true }); } };
-    F.stop = () => { F.dead = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout); };
+    F.stop = () => { F.dead = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout); grindOff(); document.removeEventListener('keydown', F.key); };
     F.key = (e) => {
       if (F.over) return;
       const k = e.key.toLowerCase(), i = { 1: 0, 2: 1, 3: 2, 4: 3, a: 0, b: 1, c: 2, d: 3 }[k];
@@ -311,9 +378,8 @@
       else if (k === 'enter' && $('#aNext', root)) ask();
     };
     document.addEventListener('keydown', F.key);
-    const stop0 = F.stop; F.stop = () => { stop0(); document.removeEventListener('keydown', F.key); };
 
-    hud(); say(B.start, 2600); banner('БОЙ!', 900);
+    setLevel(1); hud(); layout(); say(B.start, 2600); banner('СХВАТКА!', 900); grindOn();
     later(ask, 700); tick();
     return F;
   }
@@ -562,7 +628,7 @@
         .sort((a, b) => b.dmg - a.dmg);
       const teamDmg = () => mates().reduce((t, m) => t + m.dmg, 0);
       R.fight = Fight({
-        boss: B, seed: R.go.seed + ':' + id, hpMax, root: H.app,
+        boss: B, seed: R.go.seed + ':' + id, hpMax, root: H.app, heroName: (st().name || 'Батыр').slice(0, 12),
         raid: {
           teamDmg, mates,
           left: () => RAID_SEC - (Date.now() - R.t0 - 3000) / 1000,

@@ -271,5 +271,51 @@
   </g>
 </svg>`;
 
+
+  // Герой игрока: Батыр-бот, вид сбоку, упирается щитом вправо. Цвета — CSS-переменные (уровни силы)
+  ART.hero = `
+<svg viewBox="0 0 180 200" class="hero-svg">
+  <defs>
+    <linearGradient id="hrA" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color:var(--h0,#bfdbfe)"/><stop offset=".5" style="stop-color:var(--h1,#3b82f6)"/><stop offset="1" style="stop-color:var(--h2,#1e3a8a)"/></linearGradient>
+    <linearGradient id="hrD" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#334155"/><stop offset="1" stop-color="#0f172a"/></linearGradient>
+    <radialGradient id="hrS" cx=".35" cy=".35"><stop offset="0" style="stop-color:var(--h0,#bfdbfe)"/><stop offset=".6" style="stop-color:var(--h1,#3b82f6)"/><stop offset="1" style="stop-color:var(--h2,#1e3a8a)"/></radialGradient>
+    <radialGradient id="hrG"><stop offset="0" style="stop-color:var(--hg,#60a5fa)" stop-opacity=".8"/><stop offset="1" style="stop-color:var(--hg,#60a5fa)" stop-opacity="0"/></radialGradient>
+  </defs>
+  <ellipse cx="82" cy="192" rx="62" ry="7" fill="#000" opacity=".35"/>
+  <ellipse class="h-aura" cx="92" cy="110" rx="86" ry="96" fill="url(#hrG)"/>
+  <path class="h-scarf" d="M74 72 Q50 66 34 76 Q20 84 6 74 Q18 92 38 88 Q56 86 72 82 Z" fill="#facc15" stroke="#a16207" stroke-width="2"/>
+  <g class="h-legs" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <polyline points="66,128 46,156 26,182" stroke="url(#hrD)" stroke-width="17"/>
+    <polyline points="84,130 108,152 104,182" stroke="url(#hrD)" stroke-width="17"/>
+    <path d="M10 178 h30 q6 0 6 8 v4 h-38 q-4 -12 2 -12 z" fill="url(#hrA)" stroke="#0f172a" stroke-width="2.5"/>
+    <path d="M94 178 h26 q8 0 8 8 v4 h-36 z" fill="url(#hrA)" stroke="#0f172a" stroke-width="2.5"/>
+    <circle cx="46" cy="156" r="7" fill="url(#hrA)" stroke="#0f172a" stroke-width="2"/>
+    <circle cx="108" cy="152" r="7" fill="url(#hrA)" stroke="#0f172a" stroke-width="2"/>
+  </g>
+  <g class="h-body">
+    <path d="M70 84 L74 120 L86 140 L68 140 L54 120" fill="url(#hrD)"/>
+    <path d="M52 92 Q58 72 84 74 Q110 78 108 104 L102 132 Q80 142 60 132 Z" fill="url(#hrA)" stroke="#0f172a" stroke-width="3"/>
+    <path d="M66 98 Q84 92 98 102 L94 118 Q80 124 66 116 Z" fill="#0f172a" opacity=".55"/>
+    <circle cx="82" cy="108" r="7" class="h-core" style="fill:var(--hg,#60a5fa)"/>
+    <rect x="58" y="126" width="46" height="8" rx="4" fill="#facc15" stroke="#a16207" stroke-width="1.5" transform="rotate(-6 80 130)"/>
+    <path d="M60 92 L44 112 L60 118" fill="none" stroke="url(#hrD)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+    <g class="h-head">
+      <circle cx="94" cy="52" r="27" fill="url(#hrA)" stroke="#0f172a" stroke-width="3"/>
+      <path d="M100 40 Q122 42 122 56 Q120 66 104 64 Z" fill="#0f172a"/>
+      <path class="h-eye" d="M106 48 L118 50 L117 56 L105 55 Z" style="fill:var(--hg,#60a5fa)"/>
+      <path d="M80 26 Q86 8 100 12 Q92 18 94 26 Z" fill="#facc15" stroke="#a16207" stroke-width="1.5" class="h-plume"/>
+      <path d="M70 52 Q72 40 82 34" fill="none" stroke="#fff" stroke-width="3" opacity=".35" stroke-linecap="round"/>
+    </g>
+    <path d="M94 88 L122 98" stroke="url(#hrD)" stroke-width="14" stroke-linecap="round"/>
+    <g class="h-shield">
+      <ellipse class="h-sglow" cx="142" cy="104" rx="30" ry="62" style="fill:var(--hg,#60a5fa)" opacity="0"/>
+      <ellipse cx="138" cy="104" rx="20" ry="54" fill="url(#hrS)" stroke="#0f172a" stroke-width="3.5"/>
+      <ellipse cx="141" cy="104" rx="11" ry="40" fill="none" stroke="#facc15" stroke-width="3"/>
+      <path d="M135 104 l5 8 l8 -16" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+    <path d="M90 96 L128 110" stroke="url(#hrA)" stroke-width="13" stroke-linecap="round"/>
+    <circle cx="128" cy="110" r="8" fill="url(#hrA)" stroke="#0f172a" stroke-width="2"/>
+  </g>
+</svg>`;
   root.SynaqBossArt = ART;
 })(typeof window !== 'undefined' ? window : globalThis);
