@@ -45,7 +45,10 @@
   const strip = (s) => String(s || '').replace(/<[^>]+>/g, '');
   const mmss = (sec) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
   const stars = (n, tot = 3) => '★'.repeat(n) + `<i>${'★'.repeat(tot - n)}</i>`;
-  const imgOf = (k) => 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(ART[k].trim().replace('class="boss-svg"', 'xmlns="http://www.w3.org/2000/svg"').replace(/class="b-lid"/g, 'display="none"'));
+  /* боссы и бык нарисованы в rig.js так же, как на сайте повторения математики (картинки в arena/) */
+  const MODEL = { math: 'golem', physics: 'scorpion', informatics: 'serpent', chemistry: 'session', biology: 'english', geography: 'golem', final: 'dragon' };
+  const imgOf = (k) => 'arena/' + MODEL[k] + '.webp?v=2';
+  const easeBack = (x) => { const c = 1.6; x = clamp(x, 0, 1) - 1; return 1 + (c + 1) * x * x * x + c * x * x; };
   const siteUrl = () => location.origin + location.pathname;
   const starsTotal = (s) => Object.keys(s.stars).filter((k) => k !== 'final' && s.stars[k] > 0).length;
   const unlocked = (b, s) => !b.need || starsTotal(s) >= b.need;
@@ -148,7 +151,7 @@
         <div class="ar-row2"><span class="ar-hearts" id="aHearts"></span><span class="ar-combo" id="aCombo"></span><span class="ar-clock" id="aClock">0:00</span></div>
       </div>
       ${opts.raid ? '<div class="ar-team" id="aTeam"></div>' : ''}
-      <div class="ar-ring" id="aStage">
+      <div class="ar-ring" id="aStage"><canvas id="aChars"></canvas>
         <div class="ar-say" id="aSay"></div>
         <div class="ar-zone l" id="aZoneL"></div><div class="ar-zone r"></div>
         <div class="ar-floor"></div>
@@ -165,6 +168,33 @@
     </div></div>`;
     const arena = $('#arena', root), stage = $('#aStage', root), heroEl = $('#aHero', root), bossEl = $('#aBoss', root), fx = $('#aFx', root);
     arena._F = F;
+    const cvs = $('#aChars', root), cctx = cvs.getContext('2d');
+    let SCL = 1, FLR = 0, DPR = 1, cW = 0, tCv = performance.now() / 1000;
+    function fitCanvas() { // сцена как на сайте математики: ширина 430 «виртуальных» единиц, пол на 93% высоты
+      const W = stage.clientWidth; if (W < 2) return;
+      const H = Math.round(clamp(W * 0.56, 190, 320)); stage.style.height = H + 'px';
+      DPR = Math.min(2, window.devicePixelRatio || 1); cW = W;
+      cvs.width = W * DPR; cvs.height = H * DPR; SCL = W / Rig.VW; FLR = H * 0.93;
+    }
+    function drawRig(dt) {
+      if (stage.clientWidth !== cW) fitCanvas();
+      if (!cW) return;
+      const dec = (k, r) => { F[k] = (F[k] || 0) * Math.exp(-dt * r); };
+      dec('kickM', 6); dec('kickB', 6); dec('flashM', 7); dec('flashB', 8); dec('blockT', 3); dec('charge', 3);
+      F.intro = Math.min(1, (F.intro || 0) + dt / 0.65);
+      if (F.koMt) F.koM = Math.min(1, (F.koM || 0) + dt * 1.6);
+      if (F.koBt) F.koB = Math.min(1, (F.koB || 0) + dt * 1.1);
+      const e = easeBack(F.intro);
+      cctx.setTransform(1, 0, 0, 1, 0, 0); cctx.clearRect(0, 0, cvs.width, cvs.height);
+      cctx.setTransform(DPR * SCL, 0, 0, DPR * SCL, 0, DPR * FLR);
+      F.anc = Rig.draw(cctx, {
+        key: MODEL[B.k], t: performance.now() / 1000, p: clamp(F.p, -1.05, 1.05),
+        kickM: F.kickM, kickB: F.kickB, flashM: F.flashM, flashB: F.flashB, koM: F.koM || 0, koB: F.koB || 0,
+        scars: Math.min(2, HEARTS - Math.max(0, F.hearts)), shield: frozen ? 1 : 0, blockT: F.blockT, charge: F.charge, turbo: F.lv >= 3 || F.dbl, raged: F.rage,
+        stun: 0, hpFrac: clamp(hp() / opts.hpMax, 0, 1), introM: -(1 - e) * 280, introB: (1 - e) * 280, lkey: 'bull'
+      });
+    }
+    fitCanvas(); window.addEventListener('resize', fitCanvas); F.unresize = () => window.removeEventListener('resize', fitCanvas);
     const renderSnd = () => ($('#aSnd', root).textContent = st().sound ? '🔊' : '🔇');
     renderSnd();
     $('#aSnd', root).onclick = () => { const s = st(); s.sound = !s.sound; saveSt(s); renderSnd(); if (s.sound) grindOn(); else grindOff(); };
@@ -208,7 +238,7 @@
       const X = W / 2 + F.p * W * 0.26;
       heroEl.style.transform = `translateX(${X - hw * 0.86 + jit}px)`;
       bossEl.style.transform = `translateX(${X - bw * 0.1 - jit}px)`;
-      $('#aClash', root).style.left = X + 'px';
+      $('#aClash', root).style.left = (F.anc ? F.anc.contact[0] * SCL : X) + 'px';
       $('#aKnob', root).style.left = clamp(50 + F.p * 50, 0, 100) + '%';
       $('#aZoneL', root).style.opacity = clamp(-F.p * 1.2 - 0.2, 0, 1);
       return X;
@@ -275,10 +305,10 @@
         const dmg = Math.round((10 + 6 * speed) * mult * [1, 1, 1.2, 1.5][q.lvl || 1]), push = (0.22 + 0.1 * speed + 0.05 * (F.lv - 1)) * (F.dbl ? 1.8 : 1);
         F.dbl = false;
         orb(center(btn), () => {
-          anim(heroEl, 'charge', 260);
+          anim(heroEl, 'charge', 260); F.charge = 1;
           if (F.lv < 3 && ++F.pw >= 3) { F.pw = 0; setLevel(F.lv + 1); banner(F.lv >= 3 ? '⚡ БАТЫР НА МАКСИМУМЕ!' : `⚡ Батыр сильнее! Ур. ${F.lv}`, 1300); SFX.item(); vib([20, 40, 20]); }
           later(() => {
-            F.pt = F.p + push; anim(heroEl, 'shove', 380); anim(bossEl, 'hit', 380);
+            F.pt = F.p + push; anim(heroEl, 'shove', 380); anim(bossEl, 'hit', 380); F.kickM = 1; F.flashB = 1;
             F.myDmg += dmg; if (opts.raid) opts.raid.onDamage(F.myDmg);
             const c = clashPt(); floatText((crit ? 'КРИТ −' : '−') + dmg, crit ? 'crit' : '', c.x + 40, c.y - 70); sparks(c.x, c.y, crit ? 26 : 14);
             arena.classList.remove('bump'); void arena.offsetWidth; arena.classList.add('bump');
@@ -303,7 +333,7 @@
       else { if (btn) btn.classList.add('bad'); o[q.answer].classList.add('ok'); }
     }
     function lunge(k) { // рывок босса
-      anim(bossEl, 'lunge', 420); anim(heroEl, 'recoil', 420);
+      anim(bossEl, 'lunge', 420); anim(heroEl, 'recoil', 420); F.kickB = 1; F.flashM = 1;
       F.pt = F.p - k; SFX.hurt(); vib(50);
       const c = clashPt(); sparks(c.x, c.y, 10, '#fca5a5');
     }
@@ -350,7 +380,7 @@
       if (k === 'cheat') {
         const all = F.q.options.map((_, i) => i), wrong = all.filter((i) => isMulti(F.q) ? !F.q.answer.includes(i) : i !== F.q.answer); wrong.sort(() => Math.random() - 0.5);
         wrong.slice(0, 2).forEach((i) => $('#aOpts', root).children[i].classList.add('gone'));
-      } else if (k === 'freeze') { frozen = true; arena.classList.add('frozen'); banner('🛡️ Батыр упёрся'); }
+      } else if (k === 'freeze') { frozen = true; F.blockT = 1; arena.classList.add('frozen'); banner('🛡️ Батыр упёрся'); }
       else if (k === 'double') { F.dbl = true; banner('💥 Следующий толчок ×2'); }
       hud();
     }
@@ -372,6 +402,7 @@
       if (!F.qStart || F.qStartFor !== F.q) { F.qStart = now; F.qStartFor = F.q; }
       F.p += (F.pt - F.p) * Math.min(1, dt * 10);
       const X = layout();
+      drawRig(dt);
       $('#aPress', root).textContent = frozen ? '🛡️ упор' : pressing ? (F.p < -0.6 ? '⚠️ край!' : 'босс давит') : '';
       grindSet(F.over ? 0 : clamp(0.3 - F.p * 0.5, 0, 1));
       if (!F.over && now - lastSpark > (pressing ? 140 : 300)) { lastSpark = now; const a = arena.getBoundingClientRect(), r = stage.getBoundingClientRect(); sparks(X + r.left - a.left, r.top - a.top + stage.clientHeight * 0.52, 2, '#fde68a', 0.5); }
@@ -387,24 +418,24 @@
     }
     function win() {
       if (F.over) return;
-      const c = center(bossEl); bossEl.classList.add('dead'); heroEl.classList.add('victory'); say(B.die, 2000); sparks(c.x, c.y, 40, B.c, 1.5); SFX.win(); vib([40, 60, 40, 60, 120]);
+      const c = center(bossEl); bossEl.classList.add('dead'); heroEl.classList.add('victory'); F.koBt = 1; say(B.die, 2000); sparks(c.x, c.y, 40, B.c, 1.5); SFX.win(); vib([40, 60, 40, 60, 120]);
       later(() => banner('ПОБЕДА!', 1600), 500);
       finish({ win: true });
     }
     function lose(timeUp) {
       if (F.over) return;
       if (opts.raid && !timeUp && opts.raid.onOut) { // в рейде: выбыл, команда бьётся дальше
-        F.over = true; locked = true; heroEl.classList.add('down'); SFX.lose(); grindSet(0);
+        F.over = true; locked = true; heroEl.classList.add('down'); F.koMt = 1; SFX.lose(); grindSet(0);
         $('#aQ', root).innerHTML = `<div style="text-align:center;padding:8px 0"><div style="font-size:34px">💤</div><b>Ваш батыр выбыл.</b><div style="color:#64748b;font-size:14px">Команда ещё бьётся — следите за полоской здоровья босса.</div></div>`;
         hud(); opts.raid.onOut(F);
         return;
       }
-      heroEl.classList.add('down'); bossEl.classList.add('win'); say(B.win, 2400); SFX.lose();
+      heroEl.classList.add('down'); bossEl.classList.add('win'); F.koMt = 1; say(B.win, 2400); SFX.lose();
       later(() => banner(timeUp ? 'ВРЕМЯ ВЫШЛО' : F.ticketOut ? 'ВОПРОСЫ ЗАКОНЧИЛИСЬ' : 'ПОРАЖЕНИЕ', 1600), 400);
       finish({ win: false, timeUp: !!timeUp });
     }
     F.forceEnd = (w) => { if (w) { if (!F.ended) { F.ended = true; F.over = false; win(); } } else { F.over = false; finish({ win: false, timeUp: true }); } };
-    F.stop = () => { F.dead = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout); grindOff(); document.removeEventListener('keydown', F.key); };
+    F.stop = () => { F.dead = true; if (F.unresize) F.unresize(); cancelAnimationFrame(raf); timers.forEach(clearTimeout); grindOff(); document.removeEventListener('keydown', F.key); };
     F.key = (e) => {
       if (F.over) return;
       const k = e.key.toLowerCase(), i = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, a: 0, b: 1, c: 2, d: 3, e: 4, f: 5 }[k];
