@@ -83,20 +83,30 @@
   const vib = (p) => { try { navigator.vibrate && navigator.vibrate(p); } catch (e) { /* нет вибрации */ } };
 
   /* ---------- колода вопросов ---------- */
+  /* Билет из 25 вопросов по уровням сложности (от лёгких к сложным):
+     1 — лёгкий, 12 шт. (40–50%): одношаговые задания с выбором одного ответа;
+     2 — средний, 8 шт. (30–35%): задания по тексту/условию, нужно понять связи и применить правило;
+     3 — сложный, 5 шт. (20–25%): выбор нескольких верных ответов из шести. */
+  const TICKET = [12, 8, 5], TICKET_N = 25, LV_NAME = ['', 'Лёгкий', 'Средний', 'Сложный'];
   function Deck(subjects, seed) {
-    let pool = [], i = 0, n = 0;
     const R = G.H.makeR(hash('deck:' + seed));
-    const take = (s, k) => {
-      const qs = G.buildVariant(s, 'B' + seed + '-' + n).questions.filter((q) => q.type === 'single' || q.type === 'context');
-      return R.shuffle(qs).slice(0, k).map((q) => Object.assign(q, { subj: s }));
-    };
-    function refill() {
-      if (subjects.length === 1) pool = pool.concat(take(subjects[0], 30));
-      else pool = pool.concat(R.shuffle(subjects.flatMap((s) => take(s, 4))));
-      n++;
+    let tk = null, i = 0;
+    function build() {
+      const S = [], C = [], M = [];
+      subjects.forEach((s) => G.buildVariant(s, 'T' + seed + '-' + s).questions.forEach((q) => {
+        q.subj = s; (q.type === 'single' ? S : q.type === 'context' ? C : q.type === 'multi' ? M : []).push(q);
+      }));
+      const S1 = R.shuffle(S), C1 = R.shuffle(C), M1 = R.shuffle(M);
+      const easy = S1.splice(0, TICKET[0]);
+      const mid = C1.splice(0, TICKET[1]); while (mid.length < TICKET[1] && S1.length) mid.push(S1.shift());
+      const hard = M1.splice(0, TICKET[2]); while (hard.length < TICKET[2] && C1.length) hard.push(C1.shift());
+      tk = [].concat(easy.map((q) => Object.assign(q, { lvl: 1 })), mid.map((q) => Object.assign(q, { lvl: 2 })), hard.map((q) => Object.assign(q, { lvl: 3 })));
     }
-    return { next() { if (i >= pool.length) refill(); return pool[i++]; } };
+    return { total: TICKET_N, next() { if (!tk) build(); return i < tk.length ? tk[i++] : null; } };
   }
+  const LETTERS = 'ABCDEF';
+  const ansText = (q) => q.type === 'multi' ? q.answer.map((k) => `${LETTERS[k]}) ${q.options[k]}`).join('; ') : `${LETTERS[q.answer]}) ${q.options[q.answer]}`;
+  const isMulti = (q) => q && q.type === 'multi';
 
   /* ---------- бой: 2D-схватка ----------
      Батыр и босс упёрлись друг в друга в центре. Босс всё время давит — точка схватки ползёт к краю батыра.
@@ -130,6 +140,7 @@
 
     root.innerHTML = `
     <div class="ar-wrap"><div class="ar-dark" id="arena" style="--c:${B.c};--c2:${B.c2}">
+      <div class="ar-fixed">
       <div class="ar-hud">
         <div class="ar-top"><div class="ar-bname">${B.name}<small>${opts.raid ? 'рейд' : B.subj.length > 1 ? 'все предметы' : SUBJ_NAME[B.subj[0]]}</small></div>
           <div style="display:flex;gap:6px"><button class="ar-x" id="aSnd" aria-label="Звук"></button><button class="ar-x" id="aX" aria-label="Выйти">×</button></div></div>
@@ -147,6 +158,7 @@
       </div>
       <div class="ar-tug"><span class="z l">край</span><div class="tr"><i class="mid"></i><b id="aKnob"></b></div><span class="z r">ринг-аут</span></div>
       <div class="ar-power" id="aPower"><span id="aLv"></span><div class="bar"><i id="aPow"></i></div><span id="aPress"></span></div>
+      </div>
       <div class="ar-q" id="aQ"></div>
       <div class="ar-pw" id="aPw"></div>
       <div class="ar-fx" id="aFx"></div><div class="ar-banner" id="aBan"></div><div class="ar-flash"></div>
@@ -224,28 +236,43 @@
       if (F.over || F.dead) return;
       locked = false; frozen = false;
       const q = (F.q = deck.next());
+      if (!q) { F.ticketOut = true; F.q = null; return lose(); } // все 25 вопросов билета прошли, а босс жив
       F.tot++;
       const len = strip(q.text).length + strip(q.context).length + q.options.map(strip).join('').length;
-      limit = clamp(14 + len / 8, 18, 50);
-      $('#aQ', root).innerHTML = `<div class="meta"><span>Вопрос ${F.tot}${B.subj.length > 1 ? ' · ' + SUBJ_NAME[q.subj] : ''}</span><span>помоги батыру — ответь верно</span></div>
-        ${q.context ? `<div class="ctx">${q.context}</div>` : ''}<div class="qt">${q.text}</div>
-        <div class="ar-opts" id="aOpts">${q.options.map((o, j) => `<button class="ar-opt" data-o="${j}"><span class="k">${'ABCD'[j]}</span><span>${o}</span></button>`).join('')}</div><div id="aExp"></div>`;
-      $('#aQ', root).querySelectorAll('[data-o]').forEach((b) => (b.onclick = () => answer(+b.dataset.o, b)));
+      limit = clamp(14 + len / 8, 18, 60) * (isMulti(q) ? 1.3 : 1);
+      const mu = isMulti(q);
+      $('#aQ', root).innerHTML = `<div class="meta"><span>Вопрос ${F.tot} из ${deck.total}${B.subj.length > 1 ? ' · ' + SUBJ_NAME[q.subj] : ''}</span><span class="lvl l${q.lvl}">${'★'.repeat(q.lvl)} ${LV_NAME[q.lvl]}</span></div>
+        ${q.context ? `<div class="ctx">${q.context}</div>` : ''}<div class="qt">${q.text}</div>${mu ? '<div class="ar-hint">Выберите все верные ответы и нажмите «Ответить»</div>' : ''}
+        <div class="ar-opts" id="aOpts">${q.options.map((o, j) => `<button class="ar-opt" data-o="${j}"><span class="k">${LETTERS[j]}</span><span>${o}</span></button>`).join('')}</div>${mu ? '<button class="ar-btn blue" id="aSub" style="margin-top:10px;width:100%">Ответить</button>' : ''}<div id="aExp"></div>`;
+      $('#aQ', root).querySelectorAll('[data-o]').forEach((b) => (b.onclick = () => (mu ? b.classList.toggle('sel') : answer(+b.dataset.o, b))));
+      if (mu) $('#aSub', root).onclick = submitMulti;
       arena.classList.remove('frozen');
       hud();
+      later(() => scrollToQ(), 60);
+    }
+    /* на телефоне арена закреплена вверху: вопрос и ответы прокручиваем так, чтобы они были сразу под ней */
+    function fixedBottom() { const f = $('.ar-fixed', root); return f && getComputedStyle(f).position === 'sticky' ? f.getBoundingClientRect().bottom : 0; }
+    function scrollInto(el, pad = 8) { if (!el || !fixedBottom()) return; const d = el.getBoundingClientRect().top - fixedBottom() - pad; if (Math.abs(d) > 4) window.scrollBy({ top: d, behavior: 'smooth' }); }
+    function scrollToQ() { scrollInto($('#aQ', root), 6); }
+    function submitMulti() {
+      if (locked || F.over) return;
+      const q = F.q, sel = Array.from($('#aOpts', root).children).map((b, k) => (b.classList.contains('sel') ? k : -1)).filter((k) => k >= 0);
+      if (!sel.length) return;
+      answer(sel, $('#aSub', root), G.scoreQuestion(q, sel) === 2);
     }
 
-    function answer(j, btn) {
+    function answer(j, btn, multiOk) {
       if (locked || F.over) return;
       locked = true;
-      const q = F.q, ok = j === q.answer;
+      const q = F.q, ok = isMulti(q) ? !!multiOk : j === q.answer;
       const tUsed = (performance.now() - (F.qStart || performance.now())) / 1000, speed = clamp(1 - tUsed / limit, 0, 1);
       $('#aOpts', root).classList.add('lock');
       logTopic(q, ok);
       if (ok) {
-        btn.classList.add('ok'); F.ok++; F.combo++; F.maxCombo = Math.max(F.maxCombo, F.combo);
+        if (isMulti(q)) { j.forEach((k) => $('#aOpts', root).children[k].classList.add('ok')); $('#aSub', root).style.display = 'none'; } else btn.classList.add('ok');
+        F.ok++; F.combo++; F.maxCombo = Math.max(F.maxCombo, F.combo);
         const mult = (1 + 0.1 * Math.min(F.combo - 1, 5)) * (1 + 0.25 * (F.lv - 1)) * (F.dbl ? 2 : 1), crit = F.dbl || F.combo >= 5 || F.lv >= 3;
-        const dmg = Math.round((10 + 6 * speed) * mult), push = (0.22 + 0.1 * speed + 0.05 * (F.lv - 1)) * (F.dbl ? 1.8 : 1);
+        const dmg = Math.round((10 + 6 * speed) * mult * [1, 1, 1.2, 1.5][q.lvl || 1]), push = (0.22 + 0.1 * speed + 0.05 * (F.lv - 1)) * (F.dbl ? 1.8 : 1);
         F.dbl = false;
         orb(center(btn), () => {
           anim(heroEl, 'charge', 260);
@@ -263,12 +290,17 @@
           }, 140);
         });
       } else {
-        btn.classList.add('bad'); $('#aOpts', root).children[q.answer].classList.add('ok');
+        markWrong(q, j, btn);
         F.pw = Math.max(0, F.pw - 1); F.combo = 0;
         lunge(0.38);
         if (!F.over) miss(j);
       }
       hud();
+    }
+    function markWrong(q, j, btn) { // показываем верный ответ: зелёным, свой неверный: красным
+      const o = $('#aOpts', root).children;
+      if (isMulti(q)) { j.forEach((k) => { if (!q.answer.includes(k)) o[k].classList.add('bad'); }); q.answer.forEach((k) => o[k].classList.add('ok')); const sb = $('#aSub', root); if (sb) sb.style.display = 'none'; }
+      else { if (btn) btn.classList.add('bad'); o[q.answer].classList.add('ok'); }
     }
     function lunge(k) { // рывок босса
       anim(bossEl, 'lunge', 420); anim(heroEl, 'recoil', 420);
@@ -277,10 +309,12 @@
     }
     function miss(j) {
       const q = F.q; F.combo = 0; F.wrongs.push({ q, a: j });
-      $('#aExp', root).innerHTML = `<div class="ar-exp">${j === null ? '<b>Не успели — босс вытолкнул.</b> ' : '<b>Ошибка — босс давит!</b> '}Верный ответ: <b style="color:#15803d">${'ABCD'[q.answer]}) ${q.options[q.answer]}</b><div style="margin-top:6px">${q.explain || ''}</div>
+      $('#aExp', root).innerHTML = `<div class="ar-exp">${j === null ? '<b>Не успели — босс вытолкнул.</b> ' : '<b>Ошибка — босс давит!</b> '}Верный ответ: <b style="color:#15803d">${ansText(q)}</b><div style="margin-top:6px">${q.explain || ''}</div>
         <button class="ar-btn blue" id="aNext" style="margin-top:10px;width:100%">Дальше →</button></div>`;
       $('#aNext', root).onclick = () => ask();
-      later(() => { const e = $('#aExp', root); if (e && e.scrollIntoView && window.innerHeight < 760) e.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }, 120);
+      const ok = $('#aOpts', root).querySelector('.ok'); // к верному ответу; через 2 с сами идём дальше
+      later(() => scrollInto(ok, 10), 120);
+      later(() => { if (F.q === q && !F.over && $('#aNext', root)) ask(); }, 2000);
       hud();
     }
     function pushedOut() { // батыра вытолкнули за край
@@ -290,7 +324,7 @@
       const c = center(heroEl); floatText('−❤️', 'crit', c.x, c.y - 30);
       banner(F.hearts > 0 ? 'Батыра вытолкнули!' : 'Батыр повержен', 1200);
       const unanswered = !locked && F.q;
-      if (unanswered) { locked = true; logTopic(F.q, false); $('#aOpts', root).classList.add('lock'); $('#aOpts', root).children[F.q.answer].classList.add('ok'); }
+      if (unanswered) { locked = true; logTopic(F.q, false); $('#aOpts', root).classList.add('lock'); markWrong(F.q, isMulti(F.q) ? [] : -1, null); }
       hud();
       if (F.hearts <= 0) return lose();
       later(() => { F.p = F.pt = 0; edgeLock = false; }, 650);
@@ -314,7 +348,7 @@
       if (locked || F.over || !F.items[k]) return;
       F.items[k]--; SFX.item();
       if (k === 'cheat') {
-        const wrong = [0, 1, 2, 3].filter((i) => i !== F.q.answer); wrong.sort(() => Math.random() - 0.5);
+        const all = F.q.options.map((_, i) => i), wrong = all.filter((i) => isMulti(F.q) ? !F.q.answer.includes(i) : i !== F.q.answer); wrong.sort(() => Math.random() - 0.5);
         wrong.slice(0, 2).forEach((i) => $('#aOpts', root).children[i].classList.add('gone'));
       } else if (k === 'freeze') { frozen = true; arena.classList.add('frozen'); banner('🛡️ Батыр упёрся'); }
       else if (k === 'double') { F.dbl = true; banner('💥 Следующий толчок ×2'); }
@@ -366,16 +400,16 @@
         return;
       }
       heroEl.classList.add('down'); bossEl.classList.add('win'); say(B.win, 2400); SFX.lose();
-      later(() => banner(timeUp ? 'ВРЕМЯ ВЫШЛО' : 'ПОРАЖЕНИЕ', 1600), 400);
+      later(() => banner(timeUp ? 'ВРЕМЯ ВЫШЛО' : F.ticketOut ? 'ВОПРОСЫ ЗАКОНЧИЛИСЬ' : 'ПОРАЖЕНИЕ', 1600), 400);
       finish({ win: false, timeUp: !!timeUp });
     }
     F.forceEnd = (w) => { if (w) { if (!F.ended) { F.ended = true; F.over = false; win(); } } else { F.over = false; finish({ win: false, timeUp: true }); } };
     F.stop = () => { F.dead = true; cancelAnimationFrame(raf); timers.forEach(clearTimeout); grindOff(); document.removeEventListener('keydown', F.key); };
     F.key = (e) => {
       if (F.over) return;
-      const k = e.key.toLowerCase(), i = { 1: 0, 2: 1, 3: 2, 4: 3, a: 0, b: 1, c: 2, d: 3 }[k];
-      if (i !== undefined && !locked) { const b = $('#aOpts', root) && $('#aOpts', root).children[i]; if (b && !b.classList.contains('gone')) answer(i, b); }
-      else if (k === 'enter' && $('#aNext', root)) ask();
+      const k = e.key.toLowerCase(), i = { 1: 0, 2: 1, 3: 2, 4: 3, 5: 4, 6: 5, a: 0, b: 1, c: 2, d: 3, e: 4, f: 5 }[k];
+      if (i !== undefined && !locked) { const b = $('#aOpts', root) && $('#aOpts', root).children[i]; if (b && !b.classList.contains('gone')) { if (isMulti(F.q)) b.classList.toggle('sel'); else answer(i, b); } }
+      else if (k === 'enter') { if ($('#aNext', root)) ask(); else if (!locked && isMulti(F.q)) submitMulti(); }
     };
     document.addEventListener('keydown', F.key);
 
@@ -466,7 +500,7 @@
     if (!wrongs.length) return '';
     return `<div class="ar-review"><p style="margin:0 0 8px;color:#fff;font-weight:800">Разбор ошибок (${wrongs.length})</p>${wrongs.map(({ q, a }) => `<details><summary>${strip(q.text).slice(0, 90)}${strip(q.text).length > 90 ? '…' : ''}</summary>
       ${q.context ? `<div style="margin-top:6px;color:#475569">${q.context}</div>` : ''}<div style="margin-top:6px">${q.text}</div>
-      <div style="margin-top:6px">${a === null ? 'Не успели ответить. ' : `Ваш ответ: ${q.options[a]}. `}<span class="c">Верно: ${q.options[q.answer]}</span></div>
+      <div style="margin-top:6px">${a === null ? 'Не успели ответить. ' : `Ваш ответ: ${Array.isArray(a) ? (a.length ? a.map((k) => q.options[k]).join('; ') : '—') : q.options[a]}. `}<span class="c">Верно: ${isMulti(q) ? q.answer.map((k) => q.options[k]).join('; ') : q.options[q.answer]}</span></div>
       <div style="margin-top:6px;color:#1e3a8a">${q.explain || ''}</div></details>`).join('')}</div>`;
   }
   async function share(text, url) {
@@ -479,20 +513,21 @@
   const mstr = (s) => { const b = enc.encode(s); return [b.length >> 8, b.length & 255, ...b]; };
   const mlen = (n) => { const o = []; do { let b = n % 128; n = Math.floor(n / 128); if (n > 0) b |= 128; o.push(b); } while (n > 0); return o; };
   const mpkt = (type, body) => Uint8Array.from([type, ...mlen(body.length), ...body]);
-  function Mqtt(topic, onMsg, onState) {
-    let ws = null, ready = false, closed = false, bi = 0, ping = 0, buf = new Uint8Array(0);
-    const cid = 'snq' + Math.random().toString(36).slice(2, 12);
+  /* Одно соединение с одним брокером. Mqtt() держит их СРАЗУ ВСЕ: шлёт во все, слушает все, дубли отбрасывает —
+     так друзья не окажутся на разных брокерах (иначе «хозяин не в сети»). */
+  function MqttLink(url, topic, cid, onMsg, onUp) {
+    let ws = null, ready = false, closed = false, ping = 0, to = 0, wait = 600, buf = new Uint8Array(0);
+    const retry = (me) => { clearTimeout(to); clearInterval(ping); if (ready) { ready = false; onUp(); } try { me.close(); } catch (e) { /* */ } if (!closed) setTimeout(open, (wait = Math.min(wait * 1.6, 8000))); };
     function open() {
       if (closed) return;
-      const url = BROKERS[bi % BROKERS.length]; ready = false; buf = new Uint8Array(0); onState('connecting');
-      let me; try { me = ws = new WebSocket(url, 'mqtt'); } catch (e) { bi++; setTimeout(open, 600); return; }
+      buf = new Uint8Array(0); let me;
+      try { me = ws = new WebSocket(url, 'mqtt'); } catch (e) { setTimeout(open, 3000); return; }
       me.binaryType = 'arraybuffer';
       const tx = (b) => { if (me.readyState === 1) me.send(b); };
-      const fail = () => { if (ws !== me || closed) return; clearInterval(ping); ws = null; if (!ready) bi++; ready = false; onState('connecting'); setTimeout(open, 700); };
-      const to = setTimeout(() => { if (!ready && ws === me) { try { me.close(); } catch (e) { /* */ } fail(); } }, 6000);
+      to = setTimeout(() => { if (!ready && ws === me) retry(me); }, 7000);
       me.onopen = () => tx(mpkt(0x10, [...mstr('MQTT'), 4, 2, 0, 45, ...mstr(cid)]));
-      me.onerror = () => { };
-      me.onclose = () => { clearTimeout(to); fail(); };
+      me.onerror = () => { if (ws === me) retry(me); };
+      me.onclose = () => { if (ws === me) retry(me); };
       me.onmessage = (e) => {
         const u = new Uint8Array(e.data), nb = new Uint8Array(buf.length + u.length); nb.set(buf); nb.set(u, buf.length); buf = nb;
         for (;;) {
@@ -501,17 +536,36 @@
           do { if (i >= buf.length) return; b = buf[i++]; len += (b & 127) * mul; mul *= 128; } while (b & 128);
           if (buf.length < i + len) return;
           const type = buf[0] >> 4, fl = buf[0] & 15, body = buf.slice(i, i + len); buf = buf.slice(i + len);
-          if (type === 2) { if (body[1] === 0) tx(mpkt(0x82, [0, 1, ...mstr(topic), 0])); else { try { me.close(); } catch (x) { /* */ } } }
-          else if (type === 9) { ready = true; clearTimeout(to); onState('ready'); clearInterval(ping); ping = setInterval(() => tx(Uint8Array.of(0xC0, 0)), 25000); }
+          if (type === 2) { if (body[1] === 0) tx(mpkt(0x82, [0, 1, ...mstr(topic), 0])); else { retry(me); return; } }
+          else if (type === 9) { ready = true; wait = 600; clearTimeout(to); onUp(); clearInterval(ping); ping = setInterval(() => tx(Uint8Array.of(0xC0, 0)), 25000); }
           else if (type === 3) { const tl = (body[0] << 8) | body[1]; let k = 2 + tl; if ((fl >> 1) & 3) k += 2; try { onMsg(JSON.parse(dec.decode(body.slice(k)))); } catch (x) { /* чужое сообщение */ } }
         }
       };
     }
     open();
     return {
-      send(o) { if (!ready || !ws || ws.readyState !== 1) return false; try { ws.send(mpkt(0x30, [...mstr(topic), ...enc.encode(JSON.stringify(o))])); return true; } catch (e) { return false; } },
-      close() { closed = true; clearInterval(ping); try { ws && ws.close(); } catch (e) { /* */ } },
       get ready() { return ready; },
+      put(bytes) { if (!ready || !ws || ws.readyState !== 1) return false; try { ws.send(bytes); return true; } catch (e) { return false; } },
+      close() { closed = true; clearTimeout(to); clearInterval(ping); try { ws && ws.close(); } catch (e) { /* */ } },
+    };
+  }
+  function Mqtt(topic, onMsg, onState) {
+    const cid = 'snq' + Math.random().toString(36).slice(2, 12), seen = new Set(), order = [];
+    let closed = false, last = 'connecting';
+    const recv = (m) => {
+      if (m && m._u) { if (seen.has(m._u)) return; seen.add(m._u); order.push(m._u); if (order.length > 500) seen.delete(order.shift()); }
+      if (!closed) onMsg(m);
+    };
+    const state = () => { const s = links.some((l) => l.ready) ? 'ready' : 'connecting'; if (s !== last) { last = s; if (!closed) onState(s); } };
+    onState('connecting');
+    const links = BROKERS.map((u, i) => MqttLink(u, topic, cid + i, recv, state));
+    return {
+      send(o) {
+        const bytes = mpkt(0x30, [...mstr(topic), ...enc.encode(JSON.stringify(Object.assign({ _u: Math.random().toString(36).slice(2, 10) }, o)))]);
+        let ok = false; links.forEach((l) => { if (l.put(bytes)) ok = true; }); return ok;
+      },
+      close() { closed = true; links.forEach((l) => l.close()); },
+      get ready() { return links.some((l) => l.ready); },
     };
   }
 
